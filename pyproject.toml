@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytrader"
+version = "1.0.0"
+description = "Pakistan Stock Exchange (PSX) Trading SDK for Paper Trading and Backtesting"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "PyTrader Team"}
+]
+keywords = ["trading", "stock", "psx", "pakistan", "simulation", "backtesting", "algorithmic-trading"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic ::  Mathematics",
+]
+
+# Core runtime dependencies for the SDK
+dependencies = [
+    "pydantic>=2.0.0",
+    "httpx>=0.24.0",
+    "sqlalchemy>=2.0.0", 
+    "pandas>=1.5.0",
+    "numpy>=1.24.0",
+    "ta>=0.11.0",
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+# Development dependencies (for SDK development)
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0", 
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+# Jupyter/Colab support (recommended for notebook environments)
+jupyter = [
+    "nest-asyncio>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/pytrader"
+Documentation = "https://github.com/yourusername/pytrader/blob/main/README.md"
+Repository = "https://github.com/yourusername/pytrader"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pytrader*", "examples*"]
+exclude = [
+    "tests*",
+    "logs*",
+    "user_data*",
+    "scripts*",
+    "test bots*",
+    "pytrader.egg-info*",
+    "*.egg-info*",
+]
+
+# Explicitly include SDK components only
+[tool.setuptools.package-data]
+"pytrader" = ["py.typed"]
+"pytrader.data.cache" = ["*.sql"]
+
+# CLI entry points for SDK
+[project.scripts]
+pytrader-paper = "pytrader.cli.paper_trading:main"
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"

@@ -1,0 +1,51 @@
+# PyTrader SDK Package Manifest
+# This file controls what gets included in the PyPI distribution
+
+# Include essential documentation
+include README.md
+include LICENSE
+include CHANGELOG.md
+
+# Include examples (at root level)
+recursive-include examples *.py
+
+# Include SDK source code packages (only pytrader package)
+recursive-include pytrader *.py
+
+# Include cache SQL schema if exists
+recursive-include pytrader/data/cache *.sql
+
+# Include configuration files
+include pyproject.toml
+
+# ============================================
+# EXCLUDE BACKEND API (PRIVATE - NOT FOR PyPI)
+# ============================================
+
+# ============================================
+# EXCLUDE NON-ESSENTIAL ASSETS
+# ============================================
+recursive-exclude tests *
+recursive-exclude logs *
+recursive-exclude user_data *
+recursive-exclude scripts *
+recursive-exclude "test bots" *
+recursive-exclude data/store *.db
+recursive-exclude data/cache *.db
+recursive-exclude pytrader.egg-info *
+recursive-exclude *.egg-info *
+
+# Exclude deployment files
+exclude Dockerfile
+exclude docker-compose.yml
+exclude requirements.txt
+exclude DEPLOYMENT.md
+exclude env.template
+
+# Exclude development artifacts
+exclude .*
+exclude *.log
+exclude *.db
+exclude *.sqlite
+exclude *.pyc
+exclude __pycache__

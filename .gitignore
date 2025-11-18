@@ -1,0 +1,109 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs and data
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+data/cache/
+data/store/
+user_data/accounts/*.json
+
+# Environment variables
+.env.local
+.env.*.local
+
+# Temporary files
+temp_*.py
+*.tmp
+*.bak
+
+# Reference code (not part of project)
+alpaca-py-master/
+
+# ============================================
+# BACKEND API - PRIVATE (DO NOT COMMIT TO SDK REPO)
+# ============================================
+# Note: For backend repo, api/ and deployment files are INCLUDED
+# api/ - INCLUDED in backend repo
+# pytrader/api/ - INCLUDED in backend repo
+
+# Backend deployment files (excluded from SDK repo, but included in backend repo)
+# render.yaml - INCLUDED in backend repo
+# requirements.txt - INCLUDED in backend repo
+DEPLOYMENT.md
+env.template
+Dockerfile
+docker-compose.yml
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+
