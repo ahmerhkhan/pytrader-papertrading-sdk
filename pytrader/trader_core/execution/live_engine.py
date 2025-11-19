@@ -38,7 +38,7 @@ from ..portfolio.metrics import (
     TradeMetrics,
     compute_portfolio_metrics,
 )
-from ..portfolio.service import PortfolioService
+from ..portfolio.service import PortfolioService, PortfolioSummary
 from ...utils.exceptions import DataProviderError
 from ...utils.time_utils import next_market_open, today_session_window
 from .paper_account import PaperAccountManager
@@ -140,6 +140,7 @@ class TradingEngine:
             )
         self.symbols = [s.upper().strip() for s in symbols]
         self.strategy = strategy
+        self._strategy_name = self._determine_strategy_name(strategy)
         self.config = config or EngineConfig()
         self.service = data_service or PyPSXService()
         self.bot_id = bot_id
@@ -2183,6 +2184,9 @@ class TradingEngine:
             "pnl_realized": float(trade.pnl_realized),
             "commission": float(getattr(trade, "fees", 0.0)),
             "slippage_bps": float(getattr(trade, "slippage_bps", 0.0)),
+            "source": self.bot_id,
+            "strategy_name": self._strategy_name,
+            "execution_type": "average_cost",
         }
 
     def _current_trade_count(self) -> int:
@@ -2224,6 +2228,16 @@ class TradingEngine:
             recent_trades=recent_trades or [],
         )
         self._telemetry.publish(report)
+
+    def _determine_strategy_name(self, strategy: Any) -> str:
+        if hasattr(strategy, "name") and isinstance(getattr(strategy, "name"), str):
+            return getattr(strategy, "name")
+        strategy_cls = getattr(strategy, "__class__", None)
+        if strategy_cls and hasattr(strategy_cls, "__name__"):
+            return strategy_cls.__name__
+        if isinstance(strategy, str):
+            return strategy
+        return "custom_strategy"
 
     def _publish_snapshot(self, ts: datetime, status: str) -> None:
         summary = self.portfolio.get_summary()

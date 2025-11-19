@@ -92,8 +92,13 @@ def compute_portfolio_metrics(
         if first_equity > 0:
             total_return_pct = ((equities[-1] - first_equity) / first_equity) * 100
 
-    daily_return_pct = returns[-1] * 100 if returns else 0.0
-    max_drawdown_pct = _max_drawdown_pct(equities)
+    if session_returns:
+        daily_return_pct = session_returns[-1] * 100
+    else:
+        daily_return_pct = returns[-1] * 100 if returns else 0.0
+
+    drawdown_series = session_equities if len(session_equities) >= 2 else equities
+    max_drawdown_pct = _max_drawdown_pct(drawdown_series)
     session_return_pct = 0.0
     if len(session_equities) >= 1:
         first_session_equity = session_equities[0]
