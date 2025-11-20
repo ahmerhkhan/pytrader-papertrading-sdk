@@ -59,6 +59,7 @@ def run_backtest(
     slippage_bps: float = 0.0,
     commission_per_share: float = 0.0,
     commission_pct_notional: float = 0.0,
+    allow_short: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a local backtest for a predefined strategy template.
@@ -105,6 +106,7 @@ def run_backtest(
         slippage_bps=slippage_bps,
         commission_per_share=commission_per_share,
         commission_pct_notional=commission_pct_notional,
+        allow_short=allow_short,
     )
     return result
 
