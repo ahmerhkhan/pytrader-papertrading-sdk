@@ -29,6 +29,7 @@ INTRADAY_TTL_SECONDS = int(os.getenv("PYTRADER_INTRADAY_TTL", "600"))  # 10 minu
 HISTORICAL_TTL_SECONDS = int(os.getenv("PYTRADER_HISTORICAL_TTL", "21600"))  # 6 hours
 METADATA_TTL_SECONDS = int(os.getenv("PYTRADER_METADATA_TTL", "86400"))  # 1 day
 PRICES_TTL_SECONDS = int(os.getenv("PYTRADER_PRICES_TTL", "60"))  # 1 minute snapshot
+MARKET_WATCH_TTL_SECONDS = int(os.getenv("PYTRADER_MARKET_WATCH_TTL", "30"))  # 30 seconds
 
 
 def _build_cache_key(kind: str, *parts: object) -> str:
@@ -164,4 +165,74 @@ class PyPSXService(_BaseService):
         """Get current prices snapshot."""
         cache_key = _build_cache_key("prices")
         return self._cached_get(cache_key, PRICES_TTL_SECONDS, "/prices")
+
+    def get_market_watch(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get market watch snapshot.
+        
+        Args:
+            symbol: Optional symbol filter. When provided, only the matching symbol is returned.
+        
+        Returns:
+            List of market watch entries.
+        """
+        cache_key = _build_cache_key("market_watch", symbol or "all")
+        params = {"symbol": symbol.upper()} if symbol else None
+        payload = self._cached_get(
+            cache_key,
+            MARKET_WATCH_TTL_SECONDS,
+            "/market_watch" if not symbol else "/market_watch",
+            params=params,
+        )
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return [payload]
+        return []
+
+    def get_market_watch_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single symbol quote from market watch endpoint.
+        """
+        if not symbol:
+            return None
+        cache_key = _build_cache_key("market_watch_symbol", symbol.upper())
+        payload = self._cached_get(
+            cache_key,
+            MARKET_WATCH_TTL_SECONDS,
+            f"/market_watch/{symbol.upper()}",
+        )
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            return payload[0] if payload else None
+        return None
+
+    def get_market_watch_bulk(self, symbols: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch market watch quotes for a collection of symbols.
+        """
+        unique_symbols = {str(symbol).upper() for symbol in symbols if symbol}
+        if not unique_symbols:
+            return {}
+
+        results: Dict[str, Dict[str, Any]] = {}
+        # If there are many symbols, fetch the entire board once to reduce API calls
+        if len(unique_symbols) > 8:
+            try:
+                entries = self.get_market_watch()
+            except DataProviderError:
+                entries = []
+            for entry in entries:
+                sym = str(entry.get("symbol", "")).upper()
+                if sym in unique_symbols:
+                    results[sym] = entry
+            return results
+
+        for symbol in unique_symbols:
+            quote = self.get_market_watch_quote(symbol)
+            if quote:
+                key = str(quote.get("symbol", symbol)).upper()
+                results[key] = quote
+        return results
 

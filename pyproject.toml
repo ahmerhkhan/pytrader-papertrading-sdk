@@ -36,6 +36,8 @@ dependencies = [
     "numpy>=1.24.0",
     "ta>=0.11.0",
     "tzdata>=2024.1",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.23.0",
 ]
 
 [project.optional-dependencies]
@@ -74,6 +76,7 @@ exclude = [
 [tool.setuptools.package-data]
 "pytrader" = ["py.typed"]
 "pytrader.data.cache" = ["*.sql"]
+"pytrader.dashboard.assets" = ["*"]
 
 # CLI entry points for SDK
 [project.scripts]

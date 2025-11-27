@@ -60,6 +60,13 @@ def run_backtest(
     commission_per_share: float = 0.0,
     commission_pct_notional: float = 0.0,
     allow_short: bool = False,
+    capital_allocation_pct: Optional[float] = None,
+    max_leverage: Optional[float] = None,
+    max_position_pct: Optional[float] = None,
+    max_positions: Optional[int] = None,
+    risk_per_trade_pct: Optional[float] = None,
+    min_volume_threshold: Optional[float] = None,
+    skip_illiquid_days: bool = False,
 ) -> Dict[str, Any]:
     """
     Run a local backtest for a predefined strategy template.
@@ -80,6 +87,13 @@ def run_backtest(
         slippage_bps: Slippage in basis points applied to fills.
         commission_per_share: Fixed commission per share.
         commission_pct_notional: Percentage commission on notional value.
+        capital_allocation_pct: Optional percent of equity to allocate per trade.
+        max_leverage: Optional gross leverage cap (e.g., 2.0).
+        max_position_pct: Optional percent of equity allowed per symbol.
+        max_positions: Optional cap on concurrent open positions.
+        risk_per_trade_pct: Optional percent of equity risked per trade.
+        min_volume_threshold: Minimum volume required to trade.
+        skip_illiquid_days: Skip trading when volume is below threshold.
 
     Returns:
         Dictionary containing metrics, equity_curve, trades, hourly_summary, and summary fields.
@@ -96,6 +110,10 @@ def run_backtest(
         bot_id=f"backtest-{strategy_name}",
     )
 
+    capital_allocation = None
+    if capital_allocation_pct is not None:
+        capital_allocation = max(0.0, capital_allocation_pct / 100.0)
+
     result = trader.run_backtest(
         start=start_date,
         end=end_date or start_date,
@@ -107,6 +125,13 @@ def run_backtest(
         commission_per_share=commission_per_share,
         commission_pct_notional=commission_pct_notional,
         allow_short=allow_short,
+        capital_allocation=capital_allocation,
+        max_leverage=max_leverage,
+        max_position_pct=max_position_pct,
+        max_positions=max_positions,
+        risk_per_trade_pct=risk_per_trade_pct,
+        min_volume_threshold=min_volume_threshold,
+        skip_illiquid_days=skip_illiquid_days,
     )
     return result
 
@@ -127,6 +152,11 @@ def start_paper_trading(
     metrics_path: Optional[Path] = None,
     trades_path: Optional[Path] = None,
     detailed_logs: bool = False,
+    dashboard: bool = False,
+    dashboard_host: str = "127.0.0.1",
+    dashboard_port: int = 8787,
+    dashboard_auto_open: bool = True,
+    dashboard_log_level: str = "warning",
 ) -> None:
     """
     Start terminal-only paper trading for a registered strategy template.
@@ -146,6 +176,11 @@ def start_paper_trading(
         metrics_path: CSV path for metrics history.
         trades_path: CSV path for trade history.
         detailed_logs: Toggle verbose console output.
+        dashboard: Launch the embedded dashboard automatically.
+        dashboard_host: Host/interface for the dashboard server.
+        dashboard_port: Port used by the dashboard web server.
+        dashboard_auto_open: Automatically open the browser when the dashboard starts.
+        dashboard_log_level: Log level for the embedded dashboard server.
     """
     symbols_list = _normalise_symbols(symbols)
     strategy = _resolve_strategy(strategy_name, config)
@@ -168,6 +203,11 @@ def start_paper_trading(
         metrics_path=metrics_path,
         trades_path=trades_path,
         detailed_logs=detailed_logs,
+        dashboard=dashboard,
+        dashboard_host=dashboard_host,
+        dashboard_port=dashboard_port,
+        dashboard_auto_open=dashboard_auto_open,
+        dashboard_log_level=dashboard_log_level,
     )
 
 

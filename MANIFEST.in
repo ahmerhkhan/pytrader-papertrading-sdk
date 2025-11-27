@@ -11,6 +11,7 @@ recursive-include examples *.py
 
 # Include SDK source code packages (only pytrader package)
 recursive-include pytrader *.py
+recursive-include pytrader/dashboard/assets *
 
 # Include cache SQL schema if exists
 recursive-include pytrader/data/cache *.sql

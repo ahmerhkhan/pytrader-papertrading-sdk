@@ -12,16 +12,17 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 
 from ...data.pypsx_service import PyPSXService
+from ...data.csv_provider import CSVDataProvider, CSVColumnMapping
 from ..portfolio.metrics import (
     TradeMetrics,
     compute_portfolio_metrics,
 )
-from ..portfolio.service import PortfolioService
+from ..portfolio.service import PortfolioService, PortfolioSummary
 from ...utils.logger import log_line
 from ...utils.currency import format_pkr
 
@@ -39,6 +40,17 @@ class BacktestConfig:
     commission_pct_notional: float = 0.0015  # Default: 0.15% per share (percentage-based)
     ignore_cash: bool = False  # If True, bypass cash checks (sets cash to very large number)
     allow_short: bool = False  # Allow short selling (selling without existing position)
+    max_leverage: Optional[float] = None
+    max_position_pct: Optional[float] = None
+    max_positions: Optional[int] = None
+    risk_per_trade_pct: Optional[float] = None
+    min_volume_threshold: Optional[float] = None
+    skip_illiquid_days: bool = False
+    # CSV support
+    csv_path: Optional[Union[str, Path]] = None  # Path to CSV file for data source
+    csv_column_mapping: Optional[Dict[str, str]] = None  # Column mapping dict (e.g., {"timestamp": "ts", "price": "close"})
+    csv_delimiter: str = ","  # CSV delimiter
+    csv_encoding: str = "utf-8"  # CSV file encoding
 
 
 class BacktestEngine:
@@ -59,7 +71,7 @@ class BacktestEngine:
         bot_id: str = "backtest",
     ) -> None:
         # Warn if used from SDK client code (backend should pass data_service)
-        if data_service is None:
+        if data_service is None and not (config and config.csv_path):
             warnings.warn(
                 "BacktestEngine is backend-only. SDK client code should use PyTrader client instead: "
                 "client = PyTrader(api_token='...'); client.backtest(...)",
@@ -69,7 +81,23 @@ class BacktestEngine:
         self.symbols = [s.upper().strip() for s in symbols]
         self.strategy = strategy
         self.config = config or BacktestConfig()
-        self.service = data_service or PyPSXService()
+        
+        # Initialize data service (CSV or API)
+        if self.config.csv_path:
+            # Use CSV data provider
+            column_mapping = None
+            if self.config.csv_column_mapping:
+                column_mapping = CSVColumnMapping(**self.config.csv_column_mapping)
+            self.service = CSVDataProvider(
+                csv_path=self.config.csv_path,
+                column_mapping=column_mapping,
+                delimiter=self.config.csv_delimiter,
+                encoding=self.config.csv_encoding,
+            )
+        else:
+            # Use API service
+            self.service = data_service or PyPSXService()
+        
         self.bot_id = bot_id
         self.portfolio = self._init_portfolio()
         self.metrics: Optional[Dict[str, Any]] = None
@@ -134,6 +162,17 @@ class BacktestEngine:
                 latest_row = subset.iloc[-1]
                 price = float(latest_row["close"])
                 latest_prices[symbol] = price
+                latest_volume = float(latest_row.get("volume", 0.0) or 0.0)
+                if (
+                    self.config.skip_illiquid_days
+                    and self.config.min_volume_threshold is not None
+                    and latest_volume < self.config.min_volume_threshold
+                ):
+                    skipped_trades += 1
+                    skipped_trades_by_symbol[symbol] += 1
+                    reason = "volume_filter"
+                    skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+                    continue
 
                 try:
                     signal = self.strategy.generate_signal(symbol, subset)
@@ -145,13 +184,15 @@ class BacktestEngine:
                 if signal == "HOLD":
                     continue
 
+                summary_snapshot = self.portfolio.get_summary()
+
                 # Calculate target quantity based on position sizing
-                target_qty = self._position_size_for(price)
+                target_qty = self._position_size_for(price, summary_snapshot)
                 if target_qty <= 0:
                     continue
 
                 if signal == "SELL":
-                    summary_positions = self.portfolio.get_summary().positions
+                    summary_positions = summary_snapshot.positions
                     positions: Dict[str, int] = {
                         str(p.get("symbol", "")).upper(): int(p.get("qty", 0) or 0)
                         for p in summary_positions
@@ -177,9 +218,39 @@ class BacktestEngine:
                         qty * fees_per_share
                         + abs(notional) * fees_pct_notional
                     )
+
+                    # Enforce portfolio-level constraints before proceeding
+                    open_positions = sum(
+                        1 for pos in summary.positions if (pos.get("qty", 0) or 0) > 0
+                    )
+                    symbol_has_position = any(
+                        str(pos.get("symbol", "")).upper() == symbol.upper() and (pos.get("qty", 0) or 0) > 0
+                        for pos in summary.positions
+                    )
+                    if (
+                        self.config.max_positions is not None
+                        and not symbol_has_position
+                        and open_positions >= self.config.max_positions
+                    ):
+                        skipped_trades += 1
+                        skipped_trades_by_symbol[symbol] += 1
+                        reason = "max_positions_reached"
+                        skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+                        continue
+
+                    if self.config.max_leverage and summary.equity:
+                        current_exposure = self._estimate_gross_exposure(summary.positions, latest_prices)
+                        projected_exposure = current_exposure + (qty * price)
+                        allowed_exposure = summary.equity * self.config.max_leverage
+                        if projected_exposure > allowed_exposure:
+                            skipped_trades += 1
+                            skipped_trades_by_symbol[symbol] += 1
+                            reason = "leverage_cap"
+                            skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+                            continue
                 else:  # BUY
                     # Get fresh cash balance (important when processing multiple symbols at same timestamp)
-                    summary = self.portfolio.get_summary()
+                    summary = summary_snapshot
                     available_cash = summary.cash
                     
                     # Calculate slippage and fees parameters
@@ -434,23 +505,59 @@ class BacktestEngine:
             "summary": summary,
         }
 
-    def _position_size_for(self, price: float) -> int:
+    def _estimate_gross_exposure(
+        self,
+        positions: List[Dict[str, Any]],
+        price_lookup: Dict[str, float],
+    ) -> float:
+        total_exposure = 0.0
+        for pos in positions:
+            qty = abs(float(pos.get("qty", 0) or 0))
+            if qty == 0:
+                continue
+            symbol = str(pos.get("symbol", "")).upper()
+            ref_price = price_lookup.get(symbol)
+            if ref_price is None:
+                ref_price = float(pos.get("avg_cost", 0.0) or 0.0)
+            total_exposure += qty * abs(ref_price)
+        return total_exposure
+
+    def _position_size_for(self, price: float, summary: PortfolioSummary) -> int:
         # Use capital_allocation if set, otherwise use position_notional
-        if self.config.capital_allocation is not None:
-            # Get current equity from portfolio
-            summary = self.portfolio.get_summary()
-            equity = summary.equity
+        equity = float(summary.equity or self.config.initial_cash or self.config.position_notional)
+        position_notional = self.config.position_notional
+        if self.config.capital_allocation is not None and equity > 0:
             position_notional = equity * self.config.capital_allocation
-        else:
-            position_notional = self.config.position_notional
-        
+        if self.config.risk_per_trade_pct:
+            position_notional = min(
+                position_notional,
+                equity * (self.config.risk_per_trade_pct / 100.0),
+            )
+        if self.config.max_position_pct:
+            position_notional = min(
+                position_notional,
+                equity * (self.config.max_position_pct / 100.0),
+            )
+
         qty = int(position_notional // max(price, 1e-6))
         lot = max(1, self.config.min_lot)
         return max(lot, (qty // lot) * lot)
 
     def _load_history(self, start: Optional[str], end: Optional[str]) -> Dict[str, pd.DataFrame]:
-        start_dt = datetime.fromisoformat(start) if start else None
-        end_dt = datetime.fromisoformat(end) if end else None
+        # Parse dates - allow None for CSV mode
+        start_dt = None
+        end_dt = None
+        if start:
+            try:
+                start_dt = datetime.fromisoformat(start)
+            except (ValueError, TypeError):
+                log_line(f"[{self.bot_id}] Invalid start date format: {start}")
+        if end:
+            try:
+                end_dt = datetime.fromisoformat(end)
+            except (ValueError, TypeError):
+                log_line(f"[{self.bot_id}] Invalid end date format: {end}")
+        
         history_map: Dict[str, pd.DataFrame] = {}
 
         for idx, symbol in enumerate(self.symbols, 1):

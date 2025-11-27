@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PyTrader Live Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module" src="/static/dashboard.js"></script>
+  </head>
+  <body>
+    <noscript>
+      <div class="noscript">This dashboard requires JavaScript to display live metrics.</div>
+    </noscript>
+    <header class="hero">
+      <div class="hero__title">
+        <h1>PyTrader Dashboard</h1>
+        <p id="botMeta">Waiting for bot...</p>
+      </div>
+      <div class="hero__status">
+        <span id="connectionStatus" class="badge badge--idle">Connecting</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="grid grid--stats">
+        <article class="card">
+          <p class="card__label">Equity</p>
+          <p id="equityValue" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Cash</p>
+          <p id="cashValue" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Invested</p>
+          <p id="investedValue" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Session Return</p>
+          <p id="sessionReturn" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Sharpe Ratio</p>
+          <p id="sharpeRatio" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Sortino Ratio</p>
+          <p id="sortinoRatio" class="card__value">—</p>
+        </article>
+        <article class="card">
+          <p class="card__label">Max Drawdown</p>
+          <p id="maxDrawdown" class="card__value">—</p>
+        </article>
+      </section>
+
+      <section class="panel panel--chart">
+        <div class="panel__header">
+          <h2>Equity Curve</h2>
+          <span id="lastUpdated" class="muted">—</span>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="equityChart"></canvas>
+        </div>
+      </section>
+
+      <section class="grid grid--two">
+        <article class="panel">
+          <div class="panel__header">
+            <h2>Open Positions</h2>
+            <span id="positionsCount" class="muted">0 positions</span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg Cost</th>
+                  <th>Last</th>
+                  <th>Value</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="positionsTable">
+                <tr>
+                  <td colspan="6" class="muted centered">No open positions</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel__header">
+            <h2>Recent Trades</h2>
+            <span id="tradesCount" class="muted">0 trades</span>
+          </div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="tradesTable">
+                <tr>
+                  <td colspan="6" class="muted centered">No trades yet</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
+

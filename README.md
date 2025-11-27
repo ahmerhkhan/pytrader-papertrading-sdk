@@ -8,7 +8,8 @@ PyTrader provides a simple, powerful interface for backtesting strategies and ru
 
 ## Features
 
-- 📊 **Backtesting** - Test strategies on historical data
+- 📊 **Backtesting** - Test strategies on historical data (API or CSV)
+- 📁 **CSV Support** - Use your own CSV files with flexible column mapping
 - 💹 **Paper Trading** - Run live paper trading bots with real-time data
 - 📈 **Technical Indicators** - SMA, EMA, VWAP, RSI, MACD, Bollinger Bands
 - 🎯 **Built-in Strategies** - Pre-configured strategies ready to use
@@ -181,6 +182,47 @@ result = run_backtest(
     initial_cash=1_000_000.0
 )
 ```
+
+### 6. Live Dashboard (Embedded)
+
+You can launch the embedded dashboard alongside any strategy to watch a bot’s live equity curve, trades, Sharpe/Sortino, drawdown, etc. No extra services are required—the SDK spins up a FastAPI + WebSocket server locally and streams every `TradingEngine` cycle to the browser.
+
+```python
+from pytrader import Trader, Strategy, start_dashboard
+
+class MyStrategy(Strategy):
+    ...
+
+trader = Trader(
+    strategy=MyStrategy,
+    symbols=["OGDC", "HBL"],
+    bot_id="my-dashboard-bot",
+)
+
+# Launches http://localhost:8787 and opens it in your browser
+start_dashboard(trader, port=8787)
+
+trader.run_paper_trading(
+    api_token="your-token",
+    dashboard=True,             # alternatively, pass dashboard=True to auto-launch
+    dashboard_port=8787,
+)
+```
+
+- `start_dashboard(trader, port=8787)` is optional; it’s useful if you want to preview the UI before starting the loop.
+- `dashboard=True` (or the equivalent args on `start_paper_trading`) keeps the server alive for as long as the bot runs and mirrors whatever the terminal prints.
+- Every cycle, the SDK pushes equity, cash, positions, trades, Sharpe, Sortino, drawdown, exposure, turnover, and recent fills, so the dashboard is always in sync with the live paper session.
+- When you stop the bot (Ctrl+C), the SDK automatically shuts the dashboard server down.
+
+### Dashboard Demo Without a Strategy
+
+Want to preview the dashboard UI without running a full bot? Use the bundled demo script:
+
+```bash
+python pytrader_sdk/scripts/dashboard_demo.py --port 8877
+```
+
+It keeps the server alive, streams synthetic metrics (Sharpe, Sortino, drawdown, etc.), and prints the local URL so you can inspect the charts interactively. Use this to confirm the UI renders before you wire it into your own strategy.
 
 ---
 
@@ -542,6 +584,7 @@ except AuthenticationError as e:
 ## Documentation
 
 - [`docs/usage.md`](docs/usage.md) - Detailed usage guide
+- [`docs/csv_backtesting.md`](docs/csv_backtesting.md) - CSV backtesting guide
 - [`docs/custom_strategy.md`](docs/custom_strategy.md) - Creating custom strategies
 - [`docs/advanced_strategy_guide.md`](docs/advanced_strategy_guide.md) - Advanced patterns
 - [`docs/config.md`](docs/config.md) - Configuration options

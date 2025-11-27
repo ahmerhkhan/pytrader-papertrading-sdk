@@ -10,7 +10,8 @@ import asyncio
 import hashlib
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from pathlib import Path
 
 # Import trader_core components from local modules
 from .trader_core import BacktestConfig, BacktestEngine, EngineConfig, TradingEngine
@@ -20,6 +21,9 @@ from .strategy import Strategy
 from .strategy_adapter import StrategyAdapter
 from .strategy_loader import load_strategy
 from .config import settings
+
+if TYPE_CHECKING:
+    from .dashboard import DashboardHandle
 
 
 class Trader:
@@ -78,6 +82,7 @@ class Trader:
         self._strategy_instance: Optional[Any] = None
         self._engine: Optional[TradingEngine] = None
         self._backtest_engine: Optional[BacktestEngine] = None
+        self._dashboard_handle: Optional["DashboardHandle"] = None
         self._validate_cycle_minutes(cycle_minutes)
         
         # Load strategy
@@ -134,34 +139,76 @@ class Trader:
     
     def run_backtest(
         self,
-        start: str,
+        start: Optional[str] = None,
         end: Optional[str] = None,
         api_token: Optional[str] = None,
         backend_url: Optional[str] = None,
+        csv_path: Optional[Union[str, Path]] = None,
+        csv_column_mapping: Optional[Dict[str, str]] = None,
+        csv_delimiter: str = ",",
+        csv_encoding: str = "utf-8",
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Run backtest on historical data.
 
         Args:
-            start: Start date (YYYY-MM-DD)
-            end: End date (YYYY-MM-DD), defaults to start (single day)
-            api_token: API token (used for authentication)
-            backend_url: Backend URL for token validation / telemetry
+            start: Start date (YYYY-MM-DD). Optional if using CSV.
+            end: End date (YYYY-MM-DD), defaults to start (single day). Optional if using CSV.
+            api_token: API token (used for authentication). Not required if using CSV.
+            backend_url: Backend URL for token validation / telemetry. Not required if using CSV.
+            csv_path: Path to CSV file. If provided, uses CSV instead of API for data.
+            csv_column_mapping: Column mapping dict. Keys: timestamp, price, open, high, low, close, volume, symbol.
+                                Example: {"timestamp": "ts", "price": "close", "volume": "vol"}
+            csv_delimiter: CSV delimiter (default: comma)
+            csv_encoding: CSV file encoding (default: utf-8)
             **kwargs: Additional backtest config options
         
         Returns:
             Dictionary with backtest results
+        
+        Examples:
+            # Using API (default)
+            result = trader.run_backtest(start="2024-01-01", end="2024-12-31", api_token="...")
+            
+            # Using CSV with auto-detection
+            result = trader.run_backtest(csv_path="data.csv")
+            
+            # Using CSV with custom column mapping
+            result = trader.run_backtest(
+                csv_path="data.csv",
+                csv_column_mapping={
+                    "timestamp": "ts",
+                    "price": "close",
+                    "volume": "vol"
+                }
+            )
         """
-        from .auth import require_token
-
-        require_token(api_token=api_token, backend_url=backend_url)
+        from pathlib import Path
+        
+        # If CSV is provided, don't require token
+        if csv_path:
+            csv_path = Path(csv_path)
+            if not csv_path.exists():
+                raise ValueError(f"CSV file not found: {csv_path}")
+        else:
+            from .auth import require_token
+            require_token(api_token=api_token, backend_url=backend_url)
+        
         config_kwargs = {
             'position_notional': self._config.get('position_notional', 100_000.0),
             **kwargs,
         }
         if self._config.get('initial_cash'):
             config_kwargs['initial_cash'] = self._config['initial_cash']
+        
+        # Add CSV config if provided
+        if csv_path:
+            config_kwargs['csv_path'] = csv_path
+            if csv_column_mapping:
+                config_kwargs['csv_column_mapping'] = csv_column_mapping
+            config_kwargs['csv_delimiter'] = csv_delimiter
+            config_kwargs['csv_encoding'] = csv_encoding
         
         config = BacktestConfig(**config_kwargs)
         
@@ -176,7 +223,8 @@ class Trader:
         if self._adapter and hasattr(self._backtest_engine, 'portfolio'):
             self._adapter.set_portfolio_service(self._backtest_engine.portfolio)
         
-        result = self._backtest_engine.run(start=start, end=end or start)
+        # Start and end dates are optional for CSV
+        result = self._backtest_engine.run(start=start, end=end or start if start else None)
         
         # Call on_end if available
         if self._strategy_instance and hasattr(self._strategy_instance, 'on_end'):
@@ -194,6 +242,11 @@ class Trader:
         warm_start: bool = True,
         max_cycles: Optional[int] = None,
         log_dir: Optional[Union[str, Path]] = None,
+        dashboard: bool = False,
+        dashboard_host: str = "127.0.0.1",
+        dashboard_port: int = 8787,
+        dashboard_auto_open: bool = True,
+        dashboard_log_level: str = "warning",
         **kwargs: Any,
     ) -> None:
         """
@@ -205,6 +258,11 @@ class Trader:
             warm_start: Enable warm replay before switching to live loop.
             max_cycles: Optional safety stop (None = run indefinitely).
             log_dir: Optional directory for local metrics/trade logs.
+            dashboard: When True, launch the embedded web dashboard automatically.
+            dashboard_host: Host/interface to bind the dashboard server.
+            dashboard_port: Port for the dashboard server.
+            dashboard_auto_open: Automatically open the browser once the dashboard starts.
+            dashboard_log_level: Log level passed to uvicorn (default "warning").
             **kwargs: Additional EngineConfig overrides.
         """
         try:
@@ -220,6 +278,11 @@ class Trader:
                         warm_start=warm_start,
                         max_cycles=max_cycles,
                         log_dir=log_dir,
+                        dashboard=dashboard,
+                        dashboard_host=dashboard_host,
+                        dashboard_port=dashboard_port,
+                        dashboard_auto_open=dashboard_auto_open,
+                        dashboard_log_level=dashboard_log_level,
                         **kwargs,
                     )
                 )
@@ -236,6 +299,11 @@ class Trader:
                     warm_start=warm_start,
                     max_cycles=max_cycles,
                     log_dir=log_dir,
+                dashboard=dashboard,
+                dashboard_host=dashboard_host,
+                dashboard_port=dashboard_port,
+                dashboard_auto_open=dashboard_auto_open,
+                dashboard_log_level=dashboard_log_level,
                     **kwargs,
                 )
             )
@@ -247,6 +315,11 @@ class Trader:
         warm_start: bool = True,
         max_cycles: Optional[int] = None,
         log_dir: Optional[Union[str, Path]] = None,
+        dashboard: bool = False,
+        dashboard_host: str = "127.0.0.1",
+        dashboard_port: int = 8787,
+        dashboard_auto_open: bool = True,
+        dashboard_log_level: str = "warning",
         **kwargs: Any,
     ) -> None:
         """
@@ -258,11 +331,23 @@ class Trader:
             warm_start: Replay current session before live trading.
             max_cycles: Optional stop after N cycles.
             log_dir: Directory for local telemetry.
+            dashboard: Launch the embedded dashboard automatically.
+            dashboard_host: Host/interface for dashboard binding.
+            dashboard_port: Port for the dashboard server.
+            dashboard_auto_open: Whether to open the browser automatically.
+            dashboard_log_level: Log level for the embedded server.
             **kwargs: EngineConfig overrides.
         """
         from .auth import require_token
 
         validated_token = require_token(api_token=api_token, backend_url=backend_url)
+        dashboard_handle, dashboard_owned = self._activate_dashboard(
+            enable=dashboard,
+            host=dashboard_host,
+            port=dashboard_port,
+            auto_open=dashboard_auto_open,
+            log_level=dashboard_log_level,
+        )
         config_kwargs = {
             'cycle_minutes': self._config.get('cycle_minutes', 15),
             'position_notional': self._config.get('position_notional', 100_000.0),
@@ -285,6 +370,7 @@ class Trader:
             strategy=self._strategy,
             config=config,
             bot_id=self.bot_id,
+            in_process_push=dashboard_handle.publish if dashboard_handle else None,
         )
         
         # Set portfolio service on adapter if available
@@ -305,6 +391,8 @@ class Trader:
                     self._strategy_instance.on_end()
                 except Exception:
                     pass
+            if dashboard_handle and dashboard_owned:
+                dashboard_handle.close()
     
     def stop(self) -> None:
         """Stop paper trading."""
@@ -338,6 +426,44 @@ class Trader:
                 f"cycle_minutes={cycle_minutes} is shorter than the PSX bar interval ({min_cycle}m). "
                 "Set PYTRADER_ALLOW_FAST_CYCLE=1 if you really need sub-interval testing."
             )
+
+    def _activate_dashboard(
+        self,
+        *,
+        enable: bool,
+        host: str,
+        port: int,
+        auto_open: bool,
+        log_level: str,
+    ) -> tuple[Optional["DashboardHandle"], bool]:
+        """
+        Ensure the embedded dashboard server is up and return (handle, owned_by_trader).
+        """
+        handle = self._dashboard_handle
+        owned = False
+
+        if enable and handle is None:
+            from .dashboard.runtime import DashboardHandle
+
+            handle = DashboardHandle(
+                bot_id=self.bot_id,
+                symbols=self.symbols,
+                host=host,
+                port=port,
+                log_level=log_level,
+            )
+            self._dashboard_handle = handle
+
+        if handle:
+            if enable:
+                handle.mark_owned(True)
+                handle.start(auto_open=auto_open)
+                owned = True
+            else:
+                handle.mark_owned(False)
+                handle.start(auto_open=False)
+
+        return handle, owned
 
 
 __all__ = ["Trader"]

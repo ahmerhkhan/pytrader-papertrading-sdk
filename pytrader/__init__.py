@@ -19,6 +19,7 @@ from . import indicators
 from .trader import Trader
 from .strategy import Strategy
 from .strategy_loader import load_strategy, list_strategies, register_strategy
+from .dashboard import start_dashboard
 from .sdk import run_backtest, start_paper_trading
 
 # BACKEND-ONLY: These components are for backend internal use only.
@@ -47,6 +48,7 @@ __all__ = [
     "Strategy",
     "run_backtest",
     "start_paper_trading",
+    "start_dashboard",
     "load_strategy",
     "list_strategies",
     "register_strategy",
