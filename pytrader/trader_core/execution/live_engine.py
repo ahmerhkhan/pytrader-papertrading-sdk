@@ -41,6 +41,7 @@ from ..portfolio.metrics import (
 from ..portfolio.service import PortfolioService, PortfolioSummary
 from ...utils.exceptions import DataProviderError
 from ...utils.time_utils import next_market_open, today_session_window
+from ...utils.market_hours import PSXMarketHours
 from .paper_account import PaperAccountManager
 
 
@@ -233,6 +234,8 @@ class TradingEngine:
         self._last_logged_unrealized: Dict[str, float] = {}
         self._last_logged_qty: Dict[str, int] = {}
         self._active_signals: Dict[str, SignalSnapshot] = {}
+        # Queue for orders generated after market close
+        self._queued_signals: List[SignalSnapshot] = []
         
         # Initialize CSV writer for metrics storage
         scoped_metrics_path = self.config.metrics_path
@@ -614,18 +617,36 @@ class TradingEngine:
             self._last_seen_ts.clear()
             self._refresh_session_baseline()
         
-        if not is_market_open(now):
+        # Check if market is open or if we can still generate signals (after market close)
+        market_is_open = is_market_open(now)
+        can_trade = market_is_open and PSXMarketHours.can_start_trading(now)
+        
+        if not market_is_open:
+            # Market is closed, but we can still generate signals and queue orders
+            # Process any queued signals from previous cycles
+            if self._queued_signals:
+                log_line(f"Market closed. {len(self._queued_signals)} signal(s) queued for next market open.")
+            
+            # Allow signal generation even after market close
+            # We'll continue to process_cycle but orders will be queued
+            pass
+        elif not can_trade:
+            # Market is open but data not yet available (waiting for first 15-min batch)
             local_time = now.astimezone(self._local_tz) if hasattr(self, "_local_tz") and self._local_tz else now
-            message = f"Market closed at {self._format_local_time(local_time)}. Waiting for next session..."
+            message = f"Waiting for first data batch (15-min delay). Market opened at 9:30 AM, data available at 9:45 AM..."
             log_line(message)
             self._log_system_event(
-                event="market_closed",
+                event="waiting_for_data",
                 message=message,
-                level="warning",
+                level="info",
                 local_time=local_time.isoformat(),
             )
-            self._publish_snapshot(now, status="market_closed")
+            await asyncio.sleep(30.0)  # Retry after 30 seconds
             return
+        
+        # Process queued signals if market just opened
+        if market_is_open and can_trade and self._queued_signals:
+            self._process_queued_signals(now)
         
         # Check if we're still waiting for first trade per symbol
         missing_first_trades = [sym for sym in self.symbols if sym not in self._symbol_first_trade_time]
@@ -779,6 +800,29 @@ class TradingEngine:
 
                 if warm_start or snapshot_to_execute is None:
                     summary["note"] = summary.get("note", "signal_pending")
+                    continue
+
+                # Check if market is open and can trade (accounting for 15-min delay)
+                market_is_open = is_market_open(cycle_end)
+                can_trade_now = market_is_open and PSXMarketHours.can_start_trading(cycle_end)
+                
+                if not can_trade_now:
+                    # Market is closed or data not available - queue the signal
+                    if snapshot_to_execute.side in {"BUY", "SELL"}:
+                        self._queued_signals.append(snapshot_to_execute)
+                        summary["note"] = "queued_for_next_market_open"
+                        summary["execution_side"] = snapshot_to_execute.side or "HOLD"
+                        summary["executed_qty"] = 0
+                        summary["execution_price"] = None
+                        log_line(f"[{symbol}] Signal {snapshot_to_execute.side} queued (market closed). Will execute at next market open.")
+                        self._log_system_event(
+                            event="signal_queued",
+                            message=f"{symbol} {snapshot_to_execute.side} signal queued for next market open",
+                            level="info",
+                            symbol=symbol,
+                            side=snapshot_to_execute.side,
+                            qty=snapshot_to_execute.target_qty,
+                        )
                     continue
 
                 executed = self._execute_signal(
@@ -1477,6 +1521,96 @@ class TradingEngine:
             return bias
         summary["note"] = f"bias overrode strategy ({signal})"
         return bias
+
+    def _process_queued_signals(self, now: datetime) -> None:
+        """
+        Process queued signals when market opens.
+        
+        Args:
+            now: Current datetime
+        """
+        if not self._queued_signals:
+            return
+        
+        log_line(f"Processing {len(self._queued_signals)} queued signal(s) from previous session...")
+        
+        # Get current portfolio state
+        portfolio_summary = self.portfolio.get_summary()
+        summary_positions = {pos["symbol"]: pos["qty"] for pos in portfolio_summary.positions}
+        cash_bucket = {"value": float(portfolio_summary.cash)}
+        
+        # Process each queued signal
+        processed_signals = []
+        for snapshot in self._queued_signals:
+            try:
+                # Get current price for the symbol
+                symbol = snapshot.symbol
+                if symbol not in self._last_seen_price:
+                    # Try to load current data
+                    try:
+                        df_full = self._load_symbol_history(symbol, up_to=now, use_cache=False, publish=False)
+                        if not df_full.empty:
+                            self._last_seen_price[symbol] = float(df_full["price"].iloc[-1])
+                        else:
+                            log_line(f"[{symbol}] No data available for queued signal. Skipping.")
+                            continue
+                    except Exception as exc:
+                        log_line(f"[{symbol}] Error loading data for queued signal: {exc}. Skipping.")
+                        continue
+                
+                # Update snapshot with current price if needed
+                current_price = self._last_seen_price.get(symbol, snapshot.signal_price)
+                snapshot.signal_price = current_price
+                snapshot.generated_at = now
+                
+                # Create a summary dict for the queued signal
+                summary = {
+                    "symbol": symbol,
+                    "window_start": now.isoformat(),
+                    "window_end": now.isoformat(),
+                    "status": "executing_queued",
+                    "bias": snapshot.bias,
+                    "delta_pct": 0.0,
+                    "total_volume": 0.0,
+                    "trades": 0,
+                    "vwap": snapshot.vwap,
+                    "strategy_signal": snapshot.strategy_signal,
+                    "execution_side": snapshot.side or "HOLD",
+                }
+                
+                # Execute the queued signal
+                executed = self._execute_signal(
+                    snapshot,
+                    summary,
+                    now,
+                    summary_positions,
+                    cash_bucket,
+                )
+                
+                if executed.get("trade"):
+                    log_line(f"[{symbol}] Queued {snapshot.side} signal executed successfully.")
+                    self._log_system_event(
+                        event="queued_signal_executed",
+                        message=f"{symbol} queued {snapshot.side} signal executed",
+                        level="info",
+                        symbol=symbol,
+                        side=snapshot.side,
+                        qty=executed["summary"].get("executed_qty", 0),
+                    )
+                
+                processed_signals.append(snapshot)
+            except Exception as exc:
+                log_line(f"Error processing queued signal for {snapshot.symbol}: {exc}. Continuing...")
+                # Keep the signal in queue if there was an error
+                continue
+        
+        # Remove processed signals from queue
+        for signal in processed_signals:
+            if signal in self._queued_signals:
+                self._queued_signals.remove(signal)
+        
+        if processed_signals:
+            log_line(f"Processed {len(processed_signals)} queued signal(s).")
 
     def _execute_signal(
         self,

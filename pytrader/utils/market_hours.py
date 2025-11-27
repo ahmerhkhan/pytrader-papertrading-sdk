@@ -33,18 +33,24 @@ class PSXMarketHours:
     PSX market hours tracker.
     
     PSX trading hours (Pakistan Standard Time):
-    - Monday to Thursday: 9:32 AM to 3:30 PM
-    - Friday: 9:32 AM to 1:00 PM
+    - Monday to Thursday: 9:30 AM to 3:30 PM
+    - Friday: 9:30 AM to 1:00 PM
     - Saturday and Sunday: Closed
+    
+    Note: Due to 15-minute data delay, trading can start when first data batch arrives
+    (approximately 9:45 AM for 9:30-9:45 AM data).
     """
     
     # Monday-Thursday market hours
-    MARKET_OPEN_TIME_MON_THU = time(9, 32)  # 9:32 AM
+    MARKET_OPEN_TIME_MON_THU = time(9, 30)  # 9:30 AM
     MARKET_CLOSE_TIME_MON_THU = time(15, 30)  # 3:30 PM
     
     # Friday market hours
-    MARKET_OPEN_TIME_FRI = time(9, 32)  # 9:32 AM
+    MARKET_OPEN_TIME_FRI = time(9, 30)  # 9:30 AM
     MARKET_CLOSE_TIME_FRI = time(13, 0)  # 1:00 PM
+    
+    # Data delay in minutes (endpoints receive data 15 mins after trading starts)
+    DATA_DELAY_MINUTES = 15
     
     @classmethod
     def is_weekend(cls, dt: Optional[datetime] = None) -> bool:
@@ -298,6 +304,56 @@ class PSXMarketHours:
             return "post_market"
         
         return "closed"
+    
+    @classmethod
+    def can_start_trading(cls, dt: Optional[datetime] = None) -> bool:
+        """
+        Check if trading can start (accounting for 15-minute data delay).
+        
+        Trading can start when:
+        - Market is open AND
+        - At least 15 minutes have passed since market open (first data batch available)
+        
+        Args:
+            dt: Datetime to check (default: current time)
+            
+        Returns:
+            True if trading can start (data should be available)
+        """
+        if dt is None:
+            dt = datetime.now()
+            if PYTZ_AVAILABLE:
+                dt = PSX_TIMEZONE.localize(dt) if dt.tzinfo is None else dt.astimezone(PSX_TIMEZONE)
+        else:
+            if PYTZ_AVAILABLE:
+                if dt.tzinfo is None:
+                    dt = PSX_TIMEZONE.localize(dt)
+                else:
+                    dt = dt.astimezone(PSX_TIMEZONE)
+        
+        # Check if weekend
+        if cls.is_weekend(dt):
+            return False
+        
+        # Check if market is open
+        if not cls.is_market_open(dt):
+            return False
+        
+        # Check if enough time has passed since market open for first data batch
+        current_time = dt.time()
+        weekday = dt.weekday()
+        
+        if weekday == 4:  # Friday
+            market_open = cls.MARKET_OPEN_TIME_FRI
+        else:  # Monday-Thursday
+            market_open = cls.MARKET_OPEN_TIME_MON_THU
+        
+        # Calculate time since market open
+        market_open_dt = dt.replace(hour=market_open.hour, minute=market_open.minute, second=0, microsecond=0)
+        time_since_open = dt - market_open_dt
+        
+        # Trading can start if at least DATA_DELAY_MINUTES have passed since market open
+        return time_since_open.total_seconds() >= (cls.DATA_DELAY_MINUTES * 60)
 
 
 
