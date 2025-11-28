@@ -145,15 +145,25 @@ class PyPSXService(_BaseService):
         end: Optional[datetime] = None,
         interval: str = "1d",
     ) -> List[Dict[str, Any]]:
-        """Get historical data for a symbol."""
-        start_str = start.isoformat() if start else None
-        end_str = end.isoformat() if end else None
-        cache_key = _build_cache_key("historical", symbol, start_str, end_str, interval)
+        """
+        Get historical data for a symbol.
+        
+        Uses the /historical/{symbol} endpoint which expects:
+        - start_date: YYYY-MM-DD format
+        - end_date: YYYY-MM-DD format
+        - interval: "1d" (daily) or "1w" (weekly)
+        
+        Returns list of OHLCV records: [{"date": "2024-01-01", "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 1000000}, ...]
+        """
+        # Convert datetime to YYYY-MM-DD format as expected by the API
+        start_date_str = start.strftime("%Y-%m-%d") if start else None
+        end_date_str = end.strftime("%Y-%m-%d") if end else None
+        cache_key = _build_cache_key("historical", symbol, start_date_str, end_date_str, interval)
         params: Dict[str, Any] = {"interval": interval}
-        if start_str:
-            params["start"] = start_str
-        if end_str:
-            params["end"] = end_str
+        if start_date_str:
+            params["start_date"] = start_date_str  # API expects start_date, not start
+        if end_date_str:
+            params["end_date"] = end_date_str  # API expects end_date, not end
         return self._cached_get(
             cache_key,
             HISTORICAL_TTL_SECONDS,
