@@ -382,7 +382,7 @@ if __name__ == "__main__":
 
 - Make sure you're using `from pytrader import Strategy` (not internal imports)
 - Custom strategies must be registered with the backend before use
-- Check that all dependencies are installed: `pip install pytrader`
+- Check that all dependencies are installed: `pip install "git+https://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@github.com/ahmerhkhan/pytrader-papertrading-sdk.git"`
 
 ## Next Steps
 

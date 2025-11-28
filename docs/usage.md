@@ -7,8 +7,10 @@ This guide shows you how to use the PyTrader SDK for backtesting and paper tradi
 ## 1. Installation
 
 ```bash
-pip install pytrader
+pip install "git+https://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@github.com/ahmerhkhan/pytrader-papertrading-sdk.git"
 ```
+
+**Note:** The SDK is installed directly from the private GitHub repository. Do not use `pip install pytrader` as it will not work.
 
 **Requirements:**
 - Python 3.10+
