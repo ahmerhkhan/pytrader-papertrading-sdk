@@ -370,12 +370,12 @@ class TradingEngine:
         
         # Handle case: Starting BEFORE first trade of the day
         if not has_today_trades or earliest_ts is None:
-            print("\n" + "─" * 70)
+            print("\n" + "-" * 70)
             print("⏳ WAITING FOR FIRST MARKET TRADE")
-            print("─" * 70)
+            print("-" * 70)
             print("No trades available for today yet.")
             print("Portfolio loaded. Waiting for first price update...")
-            print("─" * 70 + "\n")
+            print("-" * 70 + "\n")
             # Set session start to current time, will update when first trade arrives
             self._last_cycle_close = now
             self._last_seen_ts.clear()
@@ -396,27 +396,27 @@ class TradingEngine:
         
         # Log initialization (clean format for users)
         symbols_text = ", ".join(self.symbols)
-        print("\n" + "─" * 70)
+        print("\n" + "-" * 70)
         if self.config.warm_start:
-            print(f"📊 MODE: LIVE-WARM | Symbols: {symbols_text} | Interval: {self.config.cycle_minutes}m")
-            print("─" * 70)
+            print(f"MODE: LIVE-WARM | Symbols: {symbols_text} | Interval: {self.config.cycle_minutes}m")
+            print("-" * 70)
             current_str = self._format_local_time(now)
             print(f"\nWarm starting from current time: {current_str}")
             print("Restoring account state and revaluing with current market prices...\n")
             self._initialize_history(now)
             summary = self.portfolio.get_summary()
-            print("\n" + "─" * 70)
+            print("\n" + "-" * 70)
             print("✅ Warm Start Completed")
             print(f"Cash: {summary.cash:,.0f} PKR | Equity: {summary.equity:,.0f} PKR")
             if summary.positions:
                 print(f"Positions: {len(summary.positions)} open")
             print("Now entering LIVE PAPER TRADING...")
-            print("─" * 70 + "\n")
+            print("-" * 70 + "\n")
             self._warm_start_complete = True
             self._joined_mid_session = has_today_trades
         else:
-            print(f"📈 MODE: LIVE | Symbols: {symbols_text} | Interval: {self.config.cycle_minutes}m")
-            print("─" * 70)
+            print(f"MODE: LIVE | Symbols: {symbols_text} | Interval: {self.config.cycle_minutes}m")
+            print("-" * 70)
             summary = self.portfolio.get_summary()
             print("\nStarting fresh from current time")
             print(f"Cash: {summary.cash:,.0f} PKR | Equity: {summary.equity:,.0f} PKR\n")
@@ -2007,9 +2007,9 @@ class TradingEngine:
         print("")
 
         # TOP SECTION: cash, equity, total PnL, open positions summary, bot status
-        print("\n" + "─" * 70)
+        print("\n" + "-" * 70)
         print("PORTFOLIO SUMMARY")
-        print("─" * 70)
+        print("-" * 70)
         print(f"Cash:        {cash:,.0f} PKR")
         print(f"Equity:      {equity:,.0f} PKR")
         
@@ -2030,14 +2030,14 @@ class TradingEngine:
             print("Positions:   0 open")
         
         print(f"Status:      {bot_status.upper()}")
-        print("─" * 70)
+        print("-" * 70)
         
         # PER-SYMBOL DETAILS: quantity, avg cost, current price, unrealized PnL, value
         if positions:
             print("\nPOSITIONS")
-            print("─" * 70)
+            print("-" * 70)
             print(f"{'Symbol':<10} {'Qty':>8} {'Avg Cost':>12} {'Price':>12} {'Unreal PnL':>15} {'Value':>15}")
-            print("─" * 70)
+            print("-" * 70)
             
             for pos in positions:
                 symbol = pos.get("symbol", "")
@@ -2058,7 +2058,7 @@ class TradingEngine:
                 
                 print(f"{symbol:<10} {qty:>8} {avg_cost:>12.2f} {current_price:>12.2f} {pnl_display:>15} {market_value:>15,.0f}")
             
-            print("─" * 70)
+            print("-" * 70)
         else:
             print("\nPOSITIONS: None")
         
@@ -2066,7 +2066,7 @@ class TradingEngine:
         recent_trades = recent_trades if recent_trades is not None else self._get_recent_trades()
         if recent_trades:
             print("\nRECENT TRADES (since open)")
-            print("─" * 70)
+            print("-" * 70)
             for trade in recent_trades:
                 ts_value = trade.get("timestamp") or trade.get("ts")
                 ts_str = str(ts_value) if ts_value is not None else "-"
@@ -2103,7 +2103,7 @@ class TradingEngine:
                     pnl_display = self._colorize(pnl_display, "red")
                 
                 print(f"{ts_str} | {side_display:<4} {quantity:>4} {symbol:<8} @ {price:>8.2f} | PnL: {pnl_display}")
-            print("─" * 70)
+            print("-" * 70)
         
         print()  # Blank line for readability
 
@@ -2168,9 +2168,9 @@ class TradingEngine:
         heartbeat_str = self._format_local_time(now, "%Y-%m-%d %H:%M:%S %Z")
         
         print("")
-        print("─" * 70)
+        print("-" * 70)
         log_line(f"HOURLY SUMMARY at {time_str}")
-        print("─" * 70)
+        print("-" * 70)
         log_line(f"Equity:              {summary.equity:,.0f} PKR")
         log_line(f"Total PnL:           {metrics.cumulative_pnl:+,.0f} PKR")
         
@@ -2195,7 +2195,7 @@ class TradingEngine:
         log_line(f"Win Rate:            {win_rate:.1f}% ({winning_trades}W/{losing_trades}L)")
         log_line(f"Drawdown:            {metrics.max_drawdown_pct:.2f}%")
         log_line(f"Last Heartbeat:       {heartbeat_str}")
-        print("─" * 70)
+        print("-" * 70)
         print("")
     
     def _print_session_summary(self) -> None:
@@ -2224,9 +2224,9 @@ class TradingEngine:
         else:
             return_str = self._colorize(return_str, "red")
         
-        print("\n" + "─" * 70)
-        print("📊 SESSION SUMMARY")
-        print("─" * 70)
+        print("\n" + "-" * 70)
+        print("SESSION SUMMARY")
+        print("-" * 70)
         print(f"Total Cycles: {total_cycles} ({self._warm_start_cycles} warm-start + {total_cycles - self._warm_start_cycles} live)")
         print(f"Joined Mid-Session: {'Yes' if self._joined_mid_session else 'No'}")
         print(f"Total Trades: {total_trades}")

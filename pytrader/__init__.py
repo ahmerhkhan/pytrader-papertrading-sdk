@@ -6,21 +6,45 @@ Bots execute entirely on the founder's machines via the SDK. The backend acts
 as an authenticated data + telemetry hub (no remote strategy execution).
 """
 
-# Primary client - PyTrader REST client
+# Primary client - PyTrader REST client (doesn't trigger trader_core)
 from .client import PyTrader
 
-# Authentication
+# Authentication (doesn't trigger trader_core)
 from .auth import AuthenticationError, require_token, validate_token
 
-# Export indicators
+# Export indicators (doesn't trigger trader_core)
 from . import indicators
 
 # Deprecated: Trader class for local execution (kept for backward compatibility)
-from .trader import Trader
-from .strategy import Strategy
-from .strategy_loader import load_strategy, list_strategies, register_strategy
-from .dashboard import start_dashboard
-from .sdk import run_backtest, start_paper_trading
+# Lazy imports to avoid loading trader_core (which imports backtesting engine) 
+# when backend only needs data services like PyPSXService
+def __getattr__(name: str):
+    """Lazy import for Trader and related classes to avoid loading trader_core on package import."""
+    if name == "Trader":
+        from .trader import Trader
+        return Trader
+    if name == "Strategy":
+        from .strategy import Strategy
+        return Strategy
+    if name == "load_strategy":
+        from .strategy_loader import load_strategy
+        return load_strategy
+    if name == "list_strategies":
+        from .strategy_loader import list_strategies
+        return list_strategies
+    if name == "register_strategy":
+        from .strategy_loader import register_strategy
+        return register_strategy
+    if name == "start_dashboard":
+        from .dashboard import start_dashboard
+        return start_dashboard
+    if name == "run_backtest":
+        from .sdk import run_backtest
+        return run_backtest
+    if name == "start_paper_trading":
+        from .sdk import start_paper_trading
+        return start_paper_trading
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 # BACKEND-ONLY: These components are for backend internal use only.
 # SDK users should NOT import these - they are not part of the public API.

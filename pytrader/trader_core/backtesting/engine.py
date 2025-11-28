@@ -7,6 +7,8 @@ SDK client code should use PyTrader client instead.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
@@ -17,7 +19,41 @@ from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 
 from ...data.pypsx_service import PyPSXService
-from ...data.csv_provider import CSVDataProvider, CSVColumnMapping
+
+# Lazy import for CSV provider - only import when actually needed
+# This avoids import errors if CSV support isn't available
+_CSVDataProvider = None
+_CSVColumnMapping = None
+
+def _get_csv_provider():
+    """Lazy import of CSV provider to avoid circular import issues."""
+    global _CSVDataProvider, _CSVColumnMapping
+    if _CSVDataProvider is None:
+        # Try relative import first (works when package is properly installed)
+        try:
+            from ...data.csv_provider import CSVDataProvider, CSVColumnMapping
+            _CSVDataProvider = CSVDataProvider
+            _CSVColumnMapping = CSVColumnMapping
+        except (ImportError, ModuleNotFoundError):
+            # Fallback to absolute import
+            try:
+                from pytrader.data.csv_provider import CSVDataProvider, CSVColumnMapping
+                _CSVDataProvider = CSVDataProvider
+                _CSVColumnMapping = CSVColumnMapping
+            except (ImportError, ModuleNotFoundError):
+                # Last resort: try importing the module directly via importlib
+                try:
+                    csv_module = importlib.import_module('pytrader.data.csv_provider')
+                    _CSVDataProvider = csv_module.CSVDataProvider
+                    _CSVColumnMapping = csv_module.CSVColumnMapping
+                except (ImportError, ModuleNotFoundError, AttributeError) as e:
+                    raise ImportError(
+                        f"CSV provider (pytrader.data.csv_provider) not available: {e}. "
+                        "This module is required for CSV backtesting support. "
+                        "Please ensure the pytrader package is properly installed."
+                    ) from e
+    
+    return _CSVDataProvider, _CSVColumnMapping
 from ..portfolio.metrics import (
     TradeMetrics,
     compute_portfolio_metrics,
@@ -84,7 +120,8 @@ class BacktestEngine:
         
         # Initialize data service (CSV or API)
         if self.config.csv_path:
-            # Use CSV data provider
+            # Use CSV data provider (lazy import)
+            CSVDataProvider, CSVColumnMapping = _get_csv_provider()
             column_mapping = None
             if self.config.csv_column_mapping:
                 column_mapping = CSVColumnMapping(**self.config.csv_column_mapping)
