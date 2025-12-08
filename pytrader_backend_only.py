@@ -3,16 +3,17 @@ PyTrader SDK - Backend-Only Paper Trading Bot
 ==============================================
 
 This bot runs paper trading WITHOUT a local dashboard.
-All data is sent to the backend API and can be monitored via the Vercel web app.
+All data is automatically sent to the backend and monitored via your Vercel web app.
 
-- No local dashboard
-- All telemetry sent to backend
-- Monitor via: https://your-vercel-app.com
-- Uses aggressive custom strategies
-- Real market data (PSX stocks)
+✅ No local dashboard
+✅ Backend URL automatically configured
+✅ Only need API token + bot ID
+✅ Monitor via web app: https://your-vercel-app.com
 
 Usage:
-    python pytrader_backend_only.py
+    1. Set your API_TOKEN below
+    2. Set your BOT_ID (unique name for your bot)
+    3. Run: python pytrader_backend_only.py
 """
 
 # ============================================================================
@@ -25,13 +26,15 @@ from pytrader import Trader, Strategy
 from pytrader.indicators import SMA, EMA, RSI, MACD
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION - Only 2 things needed!
 # ============================================================================
-# Backend Configuration
-API_TOKEN = "dev-token"
-BACKEND_URL = "https://pytrader-backend.onrender.com"
+# ⚠️ REQUIRED: Set your API token here
+API_TOKEN = "dev-token"  # ✅ Change this to your API token
 
-# Trading Configuration
+# ⚠️ REQUIRED: Set your bot name/ID
+BOT_ID = "my-trading-bot"  # ✅ Change this to your unique bot name
+
+# Trading Configuration (Optional - adjust as needed)
 SYMBOLS = ["OGDC", "HBL", "UBL", "PSO", "PPL", "MCB", "FCCL", "ENGRO"]
 INITIAL_CASH = 1_000_000.0
 POSITION_NOTIONAL = 150_000.0
@@ -291,17 +294,18 @@ class AggressiveMultiSignalStrategy(Strategy):
 def run_backend_only_trading():
     """
     Run paper trading with backend telemetry only (no local dashboard).
-    All data is sent to the backend and can be monitored via Vercel web app.
+    All data is automatically sent to backend and monitored via Vercel web app.
     """
     print("=" * 80)
     print("PyTrader - Backend-Only Paper Trading Bot")
     print("=" * 80)
-    print(f"API Token: {API_TOKEN}")
-    print(f"Backend URL: {BACKEND_URL}")
-    print(f"Symbols: {', '.join(SYMBOLS[:5])}")
-    print(f"Initial Cash: {INITIAL_CASH:,.0f} PKR")
-    print(f"Cycle Interval: {CYCLE_MINUTES} minutes")
-    print(f"Strategy: AggressiveMultiSignalStrategy")
+    print(f"✅ API Token: {API_TOKEN[:10]}..." if len(API_TOKEN) > 10 else f"✅ API Token: {API_TOKEN}")
+    print(f"✅ Bot ID: {BOT_ID}")
+    print(f"✅ Backend: Auto-configured (https://pytrader-backend.onrender.com)")
+    print(f"📊 Symbols: {', '.join(SYMBOLS[:5])}")
+    print(f"💰 Initial Cash: {INITIAL_CASH:,.0f} PKR")
+    print(f"⏰ Cycle Interval: {CYCLE_MINUTES} minutes")
+    print(f"🎯 Strategy: AggressiveMultiSignalStrategy")
     print("=" * 80)
     print()
     print("🚀 Starting paper trading bot...")
@@ -316,14 +320,15 @@ def run_backend_only_trading():
         initial_cash=INITIAL_CASH,
         position_notional=POSITION_NOTIONAL,
         cycle_minutes=CYCLE_MINUTES,
-        bot_id="aggressive-backend-bot"
+        bot_id=BOT_ID
     )
 
     # Start paper trading WITHOUT dashboard
+    # Backend URL is automatically configured - no need to specify!
     try:
         trader.run_paper_trading(
             api_token=API_TOKEN,
-            backend_url=BACKEND_URL,
+            # backend_url is NOT needed - auto-configured! ✅
             dashboard=False,  # ✅ NO LOCAL DASHBOARD
             warm_start=True,  # Start with today's data
             detailed_logs=True  # Detailed console logs

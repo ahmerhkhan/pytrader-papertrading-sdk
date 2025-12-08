@@ -333,7 +333,9 @@ class TradingEngine:
         if self.is_running:
             return
         now = now_tz()
-        self._session_start, self._session_end = today_session_window(now)
+        self._session_start, session_market_close = today_session_window(now)
+        # Extend session end by 15 minutes to allow processing final batch
+        self._session_end = session_market_close + timedelta(minutes=15)
         # Local timezone for display/alignment
         self._local_tz = ZoneInfo(getattr(settings, "timezone", "Asia/Karachi"))
         
@@ -617,23 +619,22 @@ class TradingEngine:
             self._last_seen_ts.clear()
             self._refresh_session_baseline()
         
-        # Check if market is open or if we can still generate signals (after market close)
+        # Check if we're in paper trading window (includes post-market data processing)
+        can_paper_trade = PSXMarketHours.can_paper_trade(now)
         market_is_open = is_market_open(now)
         can_trade = market_is_open and PSXMarketHours.can_start_trading(now)
         
-        if not market_is_open:
-            # Market is closed, but we can still generate signals and queue orders
-            # Process any queued signals from previous cycles
+        if not can_paper_trade:
+            # Outside paper trading window - queue signals for next market open
             if self._queued_signals:
-                log_line(f"Market closed. {len(self._queued_signals)} signal(s) queued for next market open.")
+                log_line(f"Paper trading closed. {len(self._queued_signals)} signal(s) queued for next market open.")
             
-            # Allow signal generation even after market close
-            # We'll continue to process_cycle but orders will be queued
+            # Market fully closed - queue any new signals
             pass
-        elif not can_trade:
+        elif market_is_open and not can_trade:
             # Market is open but data not yet available (waiting for first 15-min batch)
             local_time = now.astimezone(self._local_tz) if hasattr(self, "_local_tz") and self._local_tz else now
-            message = f"Waiting for first data batch (15-min delay). Market opened at 9:30 AM, data available at 9:45 AM..."
+            message = f"Waiting for first data batch (15-min delay). Market opened at 9:32 AM, data available ~9:45 AM..."
             log_line(message)
             self._log_system_event(
                 event="waiting_for_data",
@@ -685,7 +686,9 @@ class TradingEngine:
 
     def _determine_cycle_end(self, now: datetime) -> Optional[datetime]:
         if self._session_start is None or self._session_end is None:
-            self._session_start, self._session_end = today_session_window(now)
+            self._session_start, session_market_close = today_session_window(now)
+            # Extend session end by 15 minutes to allow processing final batch
+            self._session_end = session_market_close + timedelta(minutes=15)
         if now < self._session_start:
             return None
         if self._sleep_seconds is not None:
@@ -2330,7 +2333,10 @@ class TradingEngine:
         is_long_cycle = cycle_minutes >= 1440  # >= 1 day (1440 minutes)
         
         if self._session_start is None or self._session_end is None:
-            self._session_start, self._session_end = today_session_window(now)
+            self._session_start, session_market_close = today_session_window(now)
+            # Extend session end by 15 minutes to allow processing final batch
+            # Market closes at 3:30 PM, but paper trading continues until 3:45 PM
+            self._session_end = session_market_close + timedelta(minutes=15)
         
         if self._last_cycle_close is None:
             # First cycle - calculate next cycle from now
@@ -2341,8 +2347,10 @@ class TradingEngine:
                 # Skip weekends
                 while target_date.weekday() >= 5:
                     target_date += timedelta(days=1)
-                # Create datetime for target date at market open (9:30 AM)
-                target_dt = datetime.combine(target_date, dt_time(9, 30))
+                # Create datetime for target date at market open
+                open_hour = settings.market_hours.open_hour
+                open_minute = settings.market_hours.open_minute
+                target_dt = datetime.combine(target_date, dt_time(open_hour, open_minute))
                 if now.tzinfo:
                     target_dt = target_dt.replace(tzinfo=now.tzinfo)
                 session_start, _ = today_session_window(target_dt)

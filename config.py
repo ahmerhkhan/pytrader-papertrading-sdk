@@ -8,9 +8,9 @@ from typing import List
 @dataclass(frozen=True)
 class MarketHours:
     open_hour: int = 9
-    open_minute: int = 0
+    open_minute: int = 32  # PSX opens at 9:32 AM
     close_hour: int = 15
-    close_minute: int = 30
+    close_minute: int = 30  # PSX closes at 3:30 PM
 
 
 @dataclass

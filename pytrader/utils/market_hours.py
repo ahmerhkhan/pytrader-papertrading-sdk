@@ -33,21 +33,23 @@ class PSXMarketHours:
     PSX market hours tracker.
     
     PSX trading hours (Pakistan Standard Time):
-    - Monday to Thursday: 9:30 AM to 3:30 PM
-    - Friday: 9:30 AM to 1:00 PM
+    - Monday to Thursday: 9:32 AM to 3:30 PM
+    - Friday: 9:32 AM to 1:00 PM
     - Saturday and Sunday: Closed
     
-    Note: Due to 15-minute data delay, trading can start when first data batch arrives
-    (approximately 9:45 AM for 9:30-9:45 AM data).
+    Note: Due to 15-minute data delay, paper trading can start when first data batch arrives
+    (approximately 9:45-9:47 AM) and continues until 3:45 PM to process the 3:30 PM batch.
     """
     
     # Monday-Thursday market hours
-    MARKET_OPEN_TIME_MON_THU = time(9, 30)  # 9:30 AM
-    MARKET_CLOSE_TIME_MON_THU = time(15, 30)  # 3:30 PM
+    MARKET_OPEN_TIME_MON_THU = time(9, 32)  # 9:32 AM (PSX actual open time)
+    MARKET_CLOSE_TIME_MON_THU = time(15, 30)  # 3:30 PM (market close)
+    PAPER_TRADING_END_TIME_MON_THU = time(15, 45)  # 3:45 PM (last batch arrives)
     
     # Friday market hours
-    MARKET_OPEN_TIME_FRI = time(9, 30)  # 9:30 AM
-    MARKET_CLOSE_TIME_FRI = time(13, 0)  # 1:00 PM
+    MARKET_OPEN_TIME_FRI = time(9, 32)  # 9:32 AM
+    MARKET_CLOSE_TIME_FRI = time(13, 0)  # 1:00 PM (market close)
+    PAPER_TRADING_END_TIME_FRI = time(13, 15)  # 1:15 PM (last batch arrives)
     
     # Data delay in minutes (endpoints receive data 15 mins after trading starts)
     DATA_DELAY_MINUTES = 15
@@ -111,6 +113,45 @@ class PSXMarketHours:
             return cls.MARKET_OPEN_TIME_FRI <= current_time < cls.MARKET_CLOSE_TIME_FRI
         else:  # Monday-Thursday
             return cls.MARKET_OPEN_TIME_MON_THU <= current_time < cls.MARKET_CLOSE_TIME_MON_THU
+    
+    @classmethod
+    def can_paper_trade(cls, dt: Optional[datetime] = None) -> bool:
+        """
+        Check if paper trading should continue.
+        
+        Paper trading continues during:
+        1. Regular market hours (9:32 AM - 3:30 PM)
+        2. Post-market data window (3:30 PM - 3:45 PM) to process final batch
+        
+        Args:
+            dt: Datetime to check (default: current time)
+            
+        Returns:
+            True if paper trading should continue
+        """
+        if dt is None:
+            dt = datetime.now()
+            if PYTZ_AVAILABLE:
+                dt = PSX_TIMEZONE.localize(dt) if dt.tzinfo is None else dt.astimezone(PSX_TIMEZONE)
+        else:
+            if PYTZ_AVAILABLE:
+                if dt.tzinfo is None:
+                    dt = PSX_TIMEZONE.localize(dt)
+                else:
+                    dt = dt.astimezone(PSX_TIMEZONE)
+        
+        if cls.is_weekend(dt):
+            return False
+        
+        current_time = dt.time()
+        weekday = dt.weekday()
+        
+        if weekday == 4:  # Friday
+            # Paper trading: 9:32 AM - 1:15 PM (includes data window)
+            return cls.MARKET_OPEN_TIME_FRI <= current_time < cls.PAPER_TRADING_END_TIME_FRI
+        else:  # Monday-Thursday
+            # Paper trading: 9:32 AM - 3:45 PM (includes data window)
+            return cls.MARKET_OPEN_TIME_MON_THU <= current_time < cls.PAPER_TRADING_END_TIME_MON_THU
     
     @classmethod
     def is_pre_market(cls, dt: Optional[datetime] = None) -> bool:

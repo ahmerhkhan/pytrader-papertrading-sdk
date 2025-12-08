@@ -353,7 +353,7 @@ class Trader:
             'position_notional': self._config.get('position_notional', 100_000.0),
             'require_token': bool(validated_token),
             'api_token': validated_token,
-            'backend_url': backend_url,
+            'backend_url': backend_url or settings.backend_url,  # Auto-use default if not provided
             'warm_start': warm_start,
             'user_id': self._compute_user_id(validated_token),
             **kwargs,
