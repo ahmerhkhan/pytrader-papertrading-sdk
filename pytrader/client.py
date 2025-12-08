@@ -84,3 +84,39 @@ class PyTrader(TelemetryClient):
         response.raise_for_status()
         return response.json()
 
+    # --- Bot management helpers -------------------------------------------------
+
+    def list_bots(self) -> List[Dict[str, Any]]:
+        """
+        List all bots for the authenticated token.
+        """
+        data = self._get("/bots")
+        return data.get("bots", [])
+
+    def create_bot(
+        self,
+        *,
+        bot_id: str,
+        bot_label: Optional[str] = None,
+        strategy_name: Optional[str] = None,
+        symbols: Optional[List[str]] = None,
+        cycle_minutes: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create or update a bot so it appears in the backend/frontend.
+        Mirrors the POST /bots endpoint in the backend.
+        """
+        payload: Dict[str, Any] = {
+            "bot_id": bot_id,
+            "bot_label": bot_label,
+            "strategy_name": strategy_name,
+            "symbols": symbols,
+            "cycle_minutes": cycle_minutes,
+        }
+        url = f"{self.base_url}/bots"
+        headers = {"X-PyTrader-Token": self.api_token}
+        response = self._reader.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+

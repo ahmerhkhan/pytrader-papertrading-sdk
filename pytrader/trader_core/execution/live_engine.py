@@ -10,7 +10,7 @@ from __future__ import annotations
 import warnings
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time as dt_time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
@@ -1128,6 +1128,24 @@ class TradingEngine:
         self._last_cycle_close = cycle_end
 
     def _floor_to_cycle(self, when: datetime) -> datetime:
+        """
+        Floor a timestamp to the nearest cycle boundary.
+        For intraday cycles: aligns within the trading session.
+        For long cycles (>= 1 day): aligns to market open on the target day.
+        """
+        cycle_minutes = self.config.cycle_minutes
+        is_long_cycle = cycle_minutes >= 1440  # >= 1 day
+        
+        if is_long_cycle:
+            # For long cycles, align to market open on the day
+            session_start, _ = today_session_window(when)
+            # Skip weekends
+            while session_start.weekday() >= 5:
+                session_start += timedelta(days=1)
+                session_start, _ = today_session_window(session_start)
+            return session_start
+        
+        # For intraday cycles, use session-based alignment
         if self._session_start is None:
             self._session_start, _ = today_session_window(when)
         if when <= self._session_start:
@@ -2260,6 +2278,9 @@ class TradingEngine:
             await asyncio.sleep(self._sleep_seconds)
             return
         now = now_tz()
+        cycle_minutes = self.config.cycle_minutes
+        is_long_cycle = cycle_minutes >= 1440  # >= 1 day
+        
         if not is_market_open(now):
             # Market is closed, wait until next market open
             next_open = next_market_open(now)
@@ -2271,37 +2292,93 @@ class TradingEngine:
             log_line(f"Market closed at {current_label}. Waiting until next session at {next_label}...")
             await asyncio.sleep(min(delay, 3600.0))  # Sleep max 1 hour at a time
             return
+        
         next_cycle = self._next_cycle_ts(now)
         delay = max(5.0, (next_cycle - now).total_seconds())
+        
         if delay > 60:
             local_time = now.astimezone(self._local_tz) if hasattr(self, "_local_tz") and self._local_tz else now
             next_cycle_local = next_cycle.astimezone(self._local_tz) if hasattr(self, "_local_tz") and self._local_tz else next_cycle
             next_label = self._format_local_time(next_cycle_local)
-            log_line(f"Waiting for next {self.config.cycle_minutes}-minute batch at {next_label}...")
+            
+            # Format cycle description for long cycles
+            if is_long_cycle:
+                days = cycle_minutes // 1440
+                if days == 1:
+                    cycle_desc = "daily"
+                elif days == 7:
+                    cycle_desc = "weekly"
+                elif days >= 28:
+                    cycle_desc = f"monthly (~{days} days)"
+                else:
+                    cycle_desc = f"{days}-day"
+                log_line(f"Waiting for next {cycle_desc} cycle at {next_label}...")
+            else:
+                log_line(f"Waiting for next {cycle_minutes}-minute batch at {next_label}...")
+        
         await asyncio.sleep(delay)
 
     def _next_cycle_ts(self, now: datetime) -> datetime:
         """
-        Calculate the next 15-minute cycle timestamp, aligned to cycle boundaries.
-        Examples: 12:00 -> 12:15, 12:15 -> 12:30, 12:30 -> 12:45, etc.
+        Calculate the next cycle timestamp, aligned to cycle boundaries.
+        Supports cycles from 15 minutes to 30 days (weekly/monthly trading).
+        
+        For intraday cycles (< 1 day): Aligns to 15-minute boundaries within trading hours.
+        For daily/weekly/monthly cycles: Aligns to market open on the target day, skipping weekends.
         """
+        cycle_minutes = self.config.cycle_minutes
+        is_long_cycle = cycle_minutes >= 1440  # >= 1 day (1440 minutes)
+        
         if self._session_start is None or self._session_end is None:
             self._session_start, self._session_end = today_session_window(now)
+        
         if self._last_cycle_close is None:
-            # First cycle - align to next cycle boundary from now
-            return self._floor_to_cycle(now) + self._cycle_delta
+            # First cycle - calculate next cycle from now
+            if is_long_cycle:
+                # For long cycles, align to market open on the target day
+                days_ahead = cycle_minutes // 1440
+                target_date = now.date() + timedelta(days=days_ahead)
+                # Skip weekends
+                while target_date.weekday() >= 5:
+                    target_date += timedelta(days=1)
+                # Create datetime for target date at market open (9:30 AM)
+                target_dt = datetime.combine(target_date, dt_time(9, 30))
+                if now.tzinfo:
+                    target_dt = target_dt.replace(tzinfo=now.tzinfo)
+                session_start, _ = today_session_window(target_dt)
+                return session_start
+            else:
+                # For intraday cycles, align to next cycle boundary
+                return self._floor_to_cycle(now) + self._cycle_delta
         
         # Next cycle is last cycle + cycle_delta
         target = self._last_cycle_close + self._cycle_delta
         
-        # If we've passed session end, wait until next market open
+        if is_long_cycle:
+            # For long cycles, ensure target is on a trading day (skip weekends)
+            while target.weekday() >= 5:
+                target += timedelta(days=1)
+            # Align to market open on that day
+            session_start, _ = today_session_window(target)
+            if target < session_start:
+                target = session_start
+            elif target > session_start.replace(hour=15, minute=30):
+                # If past market close, move to next trading day
+                target = next_market_open(target)
+            return target
+        
+        # For intraday cycles: handle session boundaries
         if self._session_end and target >= self._session_end:
+            # Cycle extends past session end - wait until next market open
             return next_market_open(now)
         
-        # If target is in the past (shouldn't happen, but handle gracefully), align to next boundary
+        # If target is in the past (shouldn't happen, but handle gracefully)
         if target <= now:
             # Align to next cycle boundary from now
             next_boundary = self._floor_to_cycle(now) + self._cycle_delta
+            # If next boundary is past session end, move to next market open
+            if self._session_end and next_boundary >= self._session_end:
+                return next_market_open(now)
             return max(next_boundary, now + timedelta(seconds=5))
         
         return target

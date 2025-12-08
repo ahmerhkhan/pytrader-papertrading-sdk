@@ -458,7 +458,8 @@ from pytrader import Trader, Strategy
 trader = Trader(
     strategy=MyStrategy,
     symbols=["OGDC"],
-    cycle_minutes=15,               # Trading cycle duration
+    cycle_minutes=15,               # Trading cycle duration (15 min to 30 days supported)
+                                    # Examples: 15 (intraday), 1440 (daily), 10080 (weekly), 43200 (monthly)
     position_notional=100_000.0,    # Position size per trade
     bot_id="my-bot",                # Bot identifier
     initial_cash=1_000_000.0,       # Starting capital
