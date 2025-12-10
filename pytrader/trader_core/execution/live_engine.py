@@ -2446,6 +2446,7 @@ class TradingEngine:
             avg_slippage_bps=avg_slippage_bps,
             recent_trades=recent_trades or [],
         )
+        log_line(f"[{self.bot_id}] Publishing cycle report: equity={summary_equity:.2f}, positions={len(payload['positions'])}")
         self._telemetry.publish(report)
 
     def _determine_strategy_name(self, strategy: Any) -> str:
@@ -2511,8 +2512,12 @@ class TradingEngine:
         backend_client: Optional[TelemetryClient] = None
 
         if in_process_push is not None:
+            log_line(f"[{self.bot_id}] Using CallbackTelemetry (dashboard mode)")
             sinks.append(CallbackTelemetry(in_process_push))
         elif self.config.backend_url and self.config.api_token:
+            log_line(f"[{self.bot_id}] ✓ Initializing BackendRelayTelemetry")
+            log_line(f"[{self.bot_id}]   Backend URL: {self.config.backend_url}")
+            log_line(f"[{self.bot_id}]   Token: {self.config.api_token[:10]}...")
             client = TelemetryClient(
                 bot_id=self.bot_id,
                 api_token=self.config.api_token,
@@ -2521,8 +2526,12 @@ class TradingEngine:
             )
             sinks.append(BackendRelayTelemetry(client))
             backend_client = client
+            log_line(f"[{self.bot_id}] ✓ Backend telemetry ready - will push to {self.config.backend_url}")
+        else:
+            log_line(f"[{self.bot_id}] ⚠ WARNING: No backend telemetry (backend_url={self.config.backend_url}, token={bool(self.config.api_token)})")
 
         if not sinks:
+            log_line(f"[{self.bot_id}] Using NullTelemetry (no sinks configured)")
             sinks.append(NullTelemetry())
 
         return CompositeTelemetry(sinks), backend_client
