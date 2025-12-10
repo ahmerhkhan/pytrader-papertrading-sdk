@@ -233,6 +233,7 @@ class BackendRelayTelemetry:
 
     def publish(self, report: CycleReport) -> None:
         try:
+            # 1. Update portfolio
             self._client.update_portfolio(
                 equity=report.equity,
                 cash=report.cash,
@@ -242,6 +243,8 @@ class BackendRelayTelemetry:
                 status=report.status,
                 recent_trades=report.recent_trades or [],
             )
+            
+            # 2. Update performance
             metrics_dict = asdict(report.metrics)
             self._client.update_performance(
                 equity=report.equity,
@@ -251,6 +254,8 @@ class BackendRelayTelemetry:
                 timestamp=report.timestamp,
                 status=report.status,
             )
+            
+            # 3. Log trades if any
             if report.trades:
                 trades_payload = []
                 for trade in report.trades:
@@ -259,8 +264,23 @@ class BackendRelayTelemetry:
                         payload["timestamp"] = report.timestamp
                     trades_payload.append(payload)
                 self._client.log_trades(trades_payload)
+            
+            # Success! (only log occasionally to avoid spam)
+            import random
+            if random.random() < 0.1:  # Log 10% of successful pushes
+                log_line(f"[{report.bot_id}] ✓ Telemetry pushed successfully")
+                
         except Exception as exc:  # pragma: no cover - network failures logged
-            log_line(f"[{report.bot_id}] BackendRelayTelemetry failed: {exc}")
+            # Print detailed error to console
+            import traceback
+            error_msg = f"[{report.bot_id}] ✗ BackendRelayTelemetry failed: {exc}"
+            log_line(error_msg)
+            # Also print stack trace for debugging
+            print(f"\n{'='*80}")
+            print(f"TELEMETRY ERROR: {exc}")
+            print(f"{'='*80}")
+            traceback.print_exc()
+            print(f"{'='*80}\n")
 
     def publish_intraday(self, symbol: str, rows: Iterable[Dict[str, Any]]) -> None:  # pragma: no cover - not used
         return

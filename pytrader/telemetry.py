@@ -139,6 +139,25 @@ class TelemetryClient:
     def _post(self, path: str, body: Dict[str, Any]) -> None:
         url = f"{self.base_url}{path}"
         headers = {"X-PyTrader-Token": self.api_token}
-        response = self._client.post(url, json=body, headers=headers)
-        response.raise_for_status()
+        try:
+            response = self._client.post(url, json=body, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # Add more context to HTTP errors
+            error_detail = f"HTTP {e.response.status_code}"
+            try:
+                error_body = e.response.json()
+                if "detail" in error_body:
+                    error_detail = f"{error_detail}: {error_body['detail']}"
+            except Exception:
+                error_detail = f"{error_detail}: {e.response.text[:200]}"
+            raise httpx.HTTPStatusError(
+                f"{error_detail} for {path}",
+                request=e.request,
+                response=e.response
+            ) from e
+        except httpx.TimeoutException as e:
+            raise httpx.TimeoutException(f"Timeout calling {path}: {str(e)}") from e
+        except Exception as e:
+            raise Exception(f"Failed to call {path}: {str(e)}") from e
 
