@@ -137,10 +137,21 @@ class TelemetryClient:
         self._client.close()
 
     def _post(self, path: str, body: Dict[str, Any]) -> None:
+        def _sanitize(value: Any) -> Any:
+            from datetime import datetime, date
+            if isinstance(value, (datetime, date)):
+                return value.isoformat()
+            if isinstance(value, list):
+                return [_sanitize(v) for v in value]
+            if isinstance(value, dict):
+                return {k: _sanitize(v) for k, v in value.items()}
+            return value
+
+        safe_body = _sanitize(body)
         url = f"{self.base_url}{path}"
         headers = {"X-PyTrader-Token": self.api_token}
         try:
-            response = self._client.post(url, json=body, headers=headers)
+            response = self._client.post(url, json=safe_body, headers=headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             # Add more context to HTTP errors
