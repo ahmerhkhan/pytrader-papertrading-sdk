@@ -2860,7 +2860,8 @@ class TradingEngine:
             # Publish initial portfolio state
             self._telemetry.publish(initial_report)
             log_line(f"✅ Synced initial portfolio to backend: {len(positions_snapshot)} position(s), equity Rs. {total_equity:,.2f}")
-            log_line(f"   Positions: {', '.join([f'{p.get(\"symbol\")} x {p.get(\"qty\")}' for p in positions_snapshot])}")
+            pos_list = ', '.join([f"{p.get('symbol')} x {p.get('qty')}" for p in positions_snapshot])
+            log_line(f"   Positions: {pos_list}")
             
         except Exception as exc:
             log_line(f"⚠️ Failed to sync initial portfolio: {exc}")
