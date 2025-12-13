@@ -439,6 +439,9 @@ class TradingEngine:
             print("-" * 70 + "\n")
             self._warm_start_complete = True
             self._joined_mid_session = has_today_trades
+            
+            # Sync portfolio after warm start (intraday_cache should be populated now)
+            self._sync_initial_portfolio()
         else:
             print(f"MODE: LIVE | Symbols: {symbols_text} | Interval: {self.config.cycle_minutes}m")
             print("-" * 70)
@@ -497,6 +500,9 @@ class TradingEngine:
         Handles market hours, errors, and continues running across sessions.
         """
         self.start()
+        
+        # Sync initial portfolio state to backend (if positions were restored)
+        self._sync_initial_portfolio()
         
         # Check for queued signals on startup and execute if market is open
         now = now_tz()
@@ -2763,6 +2769,103 @@ class TradingEngine:
             First trade timestamp of the day, or None if no trades yet today
         """
         return self._symbol_first_trade_time.get(symbol)
+    
+    def _sync_initial_portfolio(self) -> None:
+        """Sync initial portfolio state to backend after positions are restored."""
+        try:
+            if not self._telemetry or not hasattr(self._telemetry, 'publish'):
+                return
+            
+            summary = self.portfolio.get_summary()
+            if not summary.positions:
+                return  # No positions to sync
+            
+            # Get current prices for positions
+            # Priority: 1) intraday_cache, 2) last_seen_price, 3) avg_cost from position
+            prices: Dict[str, float] = {}
+            for pos in summary.positions:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+                
+                price = None
+                
+                # 1. Try intraday cache (most reliable at startup)
+                if symbol in self._intraday_cache and not self._intraday_cache[symbol].empty:
+                    df = self._intraday_cache[symbol]
+                    if 'close' in df.columns:
+                        price = float(df["close"].iloc[-1])
+                    elif 'price' in df.columns:
+                        price = float(df["price"].iloc[-1])
+                
+                # 2. Try last seen price
+                if price is None or price <= 0:
+                    price = self._last_seen_price.get(symbol)
+                
+                # 3. Use avg_cost as fallback (always available from restored positions)
+                if price is None or price <= 0:
+                    price = pos.get("avg_cost", 0.0)
+                
+                if price and price > 0:
+                    prices[symbol] = price
+            
+            # If we still don't have prices, use avg_cost for all positions
+            if not prices:
+                log_line("⚠️ No market prices available for initial sync, using avg_cost")
+                for pos in summary.positions:
+                    symbol = pos.get("symbol")
+                    avg_cost = pos.get("avg_cost", 0.0)
+                    if symbol and avg_cost > 0:
+                        prices[symbol] = avg_cost
+            
+            if not prices:
+                # Still no prices at all, skip sync
+                log_line("⚠️ No prices available for initial portfolio sync, will sync on first cycle")
+                return
+            
+            # Revalue portfolio with current prices
+            self.portfolio.revalue_and_snapshot(now_tz(), prices)
+            
+            # Build positions snapshot
+            positions_snapshot, positions_value, _ = self._build_positions_snapshot(
+                summary.positions,
+                prices,
+            )
+            
+            total_equity = float(summary.cash) + positions_value
+            
+            # Create a minimal cycle report for initial sync
+            from .telemetry import CycleReport
+            from ..portfolio.metrics import TradeMetrics
+            
+            initial_report = CycleReport(
+                bot_id=self.bot_id,
+                timestamp=now_tz(),
+                status="running",
+                equity=total_equity,
+                cash=float(summary.cash),
+                positions_value=positions_value,
+                metrics=TradeMetrics(
+                    total_return_pct=0.0,
+                    daily_return_pct=0.0,
+                    session_return_pct=0.0,
+                    cumulative_return_pct=0.0,
+                ),
+                positions=positions_snapshot,
+                trades=[],
+                prices=prices,
+                batches=[],
+            )
+            
+            # Publish initial portfolio state
+            self._telemetry.publish(initial_report)
+            log_line(f"✅ Synced initial portfolio to backend: {len(positions_snapshot)} position(s), equity Rs. {total_equity:,.2f}")
+            log_line(f"   Positions: {', '.join([f'{p.get(\"symbol\")} x {p.get(\"qty\")}' for p in positions_snapshot])}")
+            
+        except Exception as exc:
+            log_line(f"⚠️ Failed to sync initial portfolio: {exc}")
+            import traceback
+            traceback.print_exc()
     
     def _load_queued_signals_from_storage(self) -> None:
         """Load queued signals from persistent storage."""
