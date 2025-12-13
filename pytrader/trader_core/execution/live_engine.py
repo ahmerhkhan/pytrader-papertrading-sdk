@@ -43,6 +43,7 @@ from ...utils.exceptions import DataProviderError
 from ...utils.time_utils import next_market_open, today_session_window
 from ...utils.market_hours import PSXMarketHours
 from .paper_account import PaperAccountManager
+from .signal_queue import SignalQueue
 
 
 def _empty_intraday_frame() -> pd.DataFrame:
@@ -209,6 +210,7 @@ class TradingEngine:
         self._symbol_first_trade_time: Dict[str, datetime] = {}  # symbol -> first trade timestamp today
         self._symbol_open_price_today: Dict[str, float] = {}  # symbol -> first price today
         self._today_date: Optional[date] = None  # Current market day date (PKT)
+        self._off_hours_scan_done: bool = False  # Track if off-hours scan has run
 
         if self.config.require_token and not self.config.api_token:
             raise RuntimeError(
@@ -236,6 +238,15 @@ class TradingEngine:
         self._active_signals: Dict[str, SignalSnapshot] = {}
         # Queue for orders generated after market close
         self._queued_signals: List[SignalSnapshot] = []
+        
+        # Initialize persistent signal queue
+        self.signal_queue = SignalQueue(
+            bot_id=self.bot_id,
+            user_id=self.config.user_id,
+        )
+        
+        # Load queued signals from persistent storage on startup
+        self._load_queued_signals_from_storage()
         
         # Initialize CSV writer for metrics storage
         scoped_metrics_path = self.config.metrics_path
@@ -372,19 +383,31 @@ class TradingEngine:
         
         # Handle case: Starting BEFORE first trade of the day
         if not has_today_trades or earliest_ts is None:
-            print("\n" + "-" * 70)
-            print("⏳ WAITING FOR FIRST MARKET TRADE")
-            print("-" * 70)
-            print("No trades available for today yet.")
-            print("Portfolio loaded. Waiting for first price update...")
-            print("-" * 70 + "\n")
-            # Set session start to current time, will update when first trade arrives
-            self._last_cycle_close = now
-            self._last_seen_ts.clear()
-            self._last_vwap.clear()
-            # Mark as running so cycle_once can check for first trade
-            self.is_running = True
-            return  # Don't proceed with full initialization until first trade
+            # Check if market is closed - if so, allow off-hours scan to run
+            can_paper_trade = PSXMarketHours.can_paper_trade(now)
+            if not can_paper_trade:
+                # Market is closed - allow bot to run so off-hours scan can execute
+                log_line("Market is closed. Bot will run off-hours scan to generate queued signals.")
+                self._last_cycle_close = now
+                self._last_seen_ts.clear()
+                self._last_vwap.clear()
+                self.is_running = True
+                return  # Allow cycle_once to run off-hours scan
+            else:
+                # Market should be open but no trades yet - wait for first trade
+                print("\n" + "-" * 70)
+                print("⏳ WAITING FOR FIRST MARKET TRADE")
+                print("-" * 70)
+                print("No trades available for today yet.")
+                print("Portfolio loaded. Waiting for first price update...")
+                print("-" * 70 + "\n")
+                # Set session start to current time, will update when first trade arrives
+                self._last_cycle_close = now
+                self._last_seen_ts.clear()
+                self._last_vwap.clear()
+                # Mark as running so cycle_once can check for first trade
+                self.is_running = True
+                return  # Don't proceed with full initialization until first trade
         
         # We have today's trades - align to cycle grid
         if earliest_ts is not None:
@@ -474,6 +497,15 @@ class TradingEngine:
         Handles market hours, errors, and continues running across sessions.
         """
         self.start()
+        
+        # Check for queued signals on startup and execute if market is open
+        now = now_tz()
+        market_is_open = is_market_open(now)
+        can_trade = market_is_open and PSXMarketHours.can_start_trading(now)
+        if can_trade and self._queued_signals:
+            log_line("Market is open on startup. Processing queued signals...")
+            self._process_queued_signals(now)
+        
         cycles = 0
         consecutive_errors = 0
         max_consecutive_errors = 10
@@ -617,6 +649,7 @@ class TradingEngine:
             self._symbol_first_trade_time.clear()
             self._symbol_open_price_today.clear()
             self._last_seen_ts.clear()
+            self._off_hours_scan_done = False  # Reset to allow new off-hours scan on new market day
             self._refresh_session_baseline()
         
         # Check if we're in paper trading window (includes post-market data processing)
@@ -625,12 +658,24 @@ class TradingEngine:
         can_trade = market_is_open and PSXMarketHours.can_start_trading(now)
         
         if not can_paper_trade:
-            # Outside paper trading window - queue signals for next market open
+            # Outside paper trading window - run off-hours scan if not done yet
+            if not self._off_hours_scan_done:
+                self._run_off_hours_scan()
+                return
+            
+            # Off-hours scan already done - just log queued signals and sleep
             if self._queued_signals:
                 log_line(f"Paper trading closed. {len(self._queued_signals)} signal(s) queued for next market open.")
             
-            # Market fully closed - queue any new signals
-            pass
+            # Market fully closed - skip first trade check and go to sleep
+            # The sleep will happen in _sleep_until_next_cycle()
+            cycle_end = self._determine_cycle_end(now)
+            if cycle_end is None:
+                # No cycle to process, just sleep until next market open
+                await self._sleep_until_next_cycle()
+                return
+            # If cycle_end is set, continue to process cycle (shouldn't happen when market closed, but handle gracefully)
+            
         elif market_is_open and not can_trade:
             # Market is open but data not yet available (waiting for first 15-min batch)
             local_time = now.astimezone(self._local_tz) if hasattr(self, "_local_tz") and self._local_tz else now
@@ -649,18 +694,20 @@ class TradingEngine:
         if market_is_open and can_trade and self._queued_signals:
             self._process_queued_signals(now)
         
-        # Check if we're still waiting for first trade per symbol
-        missing_first_trades = [sym for sym in self.symbols if sym not in self._symbol_first_trade_time]
-        if missing_first_trades:
-            for sym in missing_first_trades:
-                try:
-                    self._load_symbol_history(sym, up_to=now, use_cache=False, publish=False)
-                except Exception:
-                    continue
-            if not self._symbol_first_trade_time:
-                log_line("Waiting for today's first market trade...")
-                await asyncio.sleep(30.0)  # Retry after 30 seconds
-                return
+        # Check if we're still waiting for first trade per symbol (only if market is open)
+        # Skip this check if market is closed - off-hours scan uses fallback data
+        if can_paper_trade:
+            missing_first_trades = [sym for sym in self.symbols if sym not in self._symbol_first_trade_time]
+            if missing_first_trades:
+                for sym in missing_first_trades:
+                    try:
+                        self._load_symbol_history(sym, up_to=now, use_cache=False, publish=False)
+                    except Exception:
+                        continue
+                if not self._symbol_first_trade_time:
+                    log_line("Waiting for today's first market trade...")
+                    await asyncio.sleep(30.0)  # Retry after 30 seconds
+                    return
         cycle_end = self._determine_cycle_end(now)
         if cycle_end is None:
             # If we have a last cycle, calculate when the next one should be
@@ -683,6 +730,44 @@ class TradingEngine:
             log_line(f"Cycle processing failed: {exc}. Continuing to next cycle...")
             import traceback
             log_line(f"Traceback details: {traceback.format_exc()}")
+
+    def _run_off_hours_scan(self) -> None:
+        """Run a single strategy scan using the most recent available data."""
+        self._off_hours_scan_done = True
+        log_line("\n" + "=" * 70)
+        log_line("🌙 MARKET CLOSED: Running off-hours strategy scan...")
+        log_line("=" * 70)
+        
+        # Use a fake cycle end time (now) for the scan
+        scan_time = now_tz()
+        
+        try:
+            # Force process cycle with fallback enabled
+            self._process_cycle(
+                scan_time, 
+                telemetry=False, # Don't publish off-hours data to stream
+                warm_start=False, 
+                log_warm=False,
+                fallback_to_recent=True # ENABLE FALLBACK
+            )
+            
+            # Report queued signals
+            queued_count = len(self._queued_signals)
+            if queued_count > 0:
+                log_line("=" * 70)
+                log_line(f"✅ OFF-HOURS SCAN COMPLETE: {queued_count} signal(s) queued for next market open.")
+                for sig in self._queued_signals:
+                    log_line(f"   -> {sig.symbol}: {sig.side} {sig.target_qty} @ ~{sig.signal_price:.2f}")
+                log_line("=" * 70 + "\n")
+                
+                # All signals are now automatically persisted to SQLite storage
+            else:
+                log_line("✅ OFF-HOURS SCAN COMPLETE: No signals generated.\n")
+                
+        except Exception as exc:
+            log_line(f"Off-hours scan failed: {exc}")
+            import traceback
+            log_line(traceback.format_exc())
 
     def _determine_cycle_end(self, now: datetime) -> Optional[datetime]:
         if self._session_start is None or self._session_end is None:
@@ -714,6 +799,7 @@ class TradingEngine:
         telemetry: bool,
         warm_start: bool,
         log_warm: bool,
+        fallback_to_recent: bool = False,
     ) -> None:
         if self._session_start is None:
             return
@@ -737,6 +823,7 @@ class TradingEngine:
                     up_to=cycle_end,
                     use_cache=self.config.use_cache,
                     publish=telemetry,
+                    fallback_to_recent=fallback_to_recent,
                 )
                 self._intraday_cache[symbol] = df_full
                 self._session_data[symbol] = df_full
@@ -813,6 +900,8 @@ class TradingEngine:
                     # Market is closed or data not available - queue the signal
                     if snapshot_to_execute.side in {"BUY", "SELL"}:
                         self._queued_signals.append(snapshot_to_execute)
+                        # Save to persistent storage
+                        self._save_signal_to_queue(snapshot_to_execute)
                         summary["note"] = "queued_for_next_market_open"
                         summary["execution_side"] = snapshot_to_execute.side or "HOLD"
                         summary["executed_qty"] = 0
@@ -1234,12 +1323,21 @@ class TradingEngine:
         up_to: datetime,
         use_cache: bool,
         publish: bool,
+        fallback_to_recent: bool = False,
     ) -> pd.DataFrame:
         """
-        Load symbol history with strict today's date filtering.
+        Load symbol history.
         
-        CRITICAL: Only returns trades from today's market day (PKT timezone).
-        Rejects all trades from yesterday or other days.
+        Args:
+            symbol: Symbol to load.
+            up_to: Max timestamp to include.
+            use_cache: whether to use cached data.
+            publish: whether to publish to telemetry.
+            fallback_to_recent: If True, allows returning data from the most recent 
+                                trading day if "today" has no data (for off-hours analysis).
+        
+        CRITICAL: By default (fallback_to_recent=False), only returns trades from 
+        today's market day (PKT timezone). Rejects all trades from yesterday or other days.
         """
         try:
             records = self.service.get_intraday(
@@ -1302,17 +1400,33 @@ class TradingEngine:
         df["ts_local"] = ts_series.dt.tz_convert(self._local_tz)
         df["ts_date"] = _as_series(df["ts_local"]).dt.date
         
-        # Filter to ONLY today's trades
-        mask_today = _as_series(df["ts_date"]) == self._today_date
-        df = cast(pd.DataFrame, df.loc[mask_today])
+        # Determine target date: either today, or most recent if fallback enabled
+        target_date = self._today_date
+        
+        # Check if we have data for today
+        has_today_data = (_as_series(df["ts_date"]) == self._today_date).any()
+        
+        if not has_today_data and fallback_to_recent:
+            # Fallback: Find the most recent date in the dataframe
+            if not df.empty:
+                unique_dates = df["ts_date"].unique()
+                if len(unique_dates) > 0:
+                    target_date = max(unique_dates)
+                    log_line(f"[{symbol}] No data for today. Falling back to most recent data: {target_date}")
+        
+        # Filter to target date
+        mask_target = _as_series(df["ts_date"]) == target_date
+        df = cast(pd.DataFrame, df.loc[mask_target])
         
         # Clamp to current time (converted to UTC)
-        up_to_ts = self._to_utc_timestamp(up_to)
-        mask_up_to = _as_series(df["ts"]) <= up_to_ts
-        df = cast(pd.DataFrame, df.loc[mask_up_to])
+        # Note: If fallback used, we ignore 'up_to' time filtering to get full day
+        if target_date == self._today_date:
+            up_to_ts = self._to_utc_timestamp(up_to)
+            mask_up_to = _as_series(df["ts"]) <= up_to_ts
+            df = cast(pd.DataFrame, df.loc[mask_up_to])
         
         # Track today's first trade and first price per symbol
-        if not df.empty:
+        if not df.empty and target_date == self._today_date:
             first_trade_row = df.iloc[0]
             first_trade_ts = first_trade_row["ts"]
             if pd.notna(first_trade_ts):
@@ -1563,6 +1677,10 @@ class TradingEngine:
         # Process each queued signal
         processed_signals = []
         for snapshot in self._queued_signals:
+            # Log signal age for visibility
+            signal_age = (now - snapshot.generated_at).total_seconds() / 3600  # hours
+            if signal_age > 24:
+                log_line(f"[{snapshot.symbol}] Warning: Signal is {signal_age:.1f} hours old (generated at {snapshot.generated_at.strftime('%Y-%m-%d %H:%M:%S')})")
             try:
                 # Get current price for the symbol
                 symbol = snapshot.symbol
@@ -1625,10 +1743,14 @@ class TradingEngine:
                 # Keep the signal in queue if there was an error
                 continue
         
-        # Remove processed signals from queue
+        # Remove processed signals from queue and mark as executed in storage
         for signal in processed_signals:
             if signal in self._queued_signals:
                 self._queued_signals.remove(signal)
+                # Mark as executed in persistent storage (if signal has signal_id attribute)
+                signal_id = getattr(signal, 'signal_id', None)
+                if signal_id:
+                    self.signal_queue.mark_executed(signal_id, now)
         
         if processed_signals:
             log_line(f"Processed {len(processed_signals)} queued signal(s).")
@@ -2641,6 +2763,60 @@ class TradingEngine:
             First trade timestamp of the day, or None if no trades yet today
         """
         return self._symbol_first_trade_time.get(symbol)
+    
+    def _load_queued_signals_from_storage(self) -> None:
+        """Load queued signals from persistent storage."""
+        try:
+            stored_signals = self.signal_queue.get_queued_signals(status='queued')
+            if not stored_signals:
+                return
+            
+            log_line(f"Loading {len(stored_signals)} queued signal(s) from persistent storage...")
+            
+            for sig_data in stored_signals:
+                # Reconstruct SignalSnapshot from stored data
+                snapshot = SignalSnapshot(
+                    symbol=sig_data['symbol'],
+                    side=sig_data['side'],
+                    strategy_signal=sig_data['strategy_signal'],
+                    bias=sig_data['bias'],
+                    generated_at=sig_data['generated_at'],
+                    signal_price=sig_data['signal_price'],
+                    vwap=sig_data['vwap'],
+                    target_qty=sig_data['target_qty'],
+                    note=sig_data['note'],
+                    delta_pct=sig_data['delta_pct'],
+                    batch_label=sig_data.get('batch_label'),
+                )
+                # Store signal_id for later reference
+                snapshot.signal_id = sig_data['signal_id']  # type: ignore
+                self._queued_signals.append(snapshot)
+            
+            if stored_signals:
+                log_line(f"✅ Loaded {len(stored_signals)} queued signal(s) from storage")
+        except Exception as exc:
+            log_line(f"⚠️ Failed to load queued signals from storage: {exc}")
+    
+    def _save_signal_to_queue(self, snapshot: SignalSnapshot) -> None:
+        """Save signal to persistent storage."""
+        try:
+            signal_id = self.signal_queue.enqueue_signal(
+                symbol=snapshot.symbol,
+                side=snapshot.side,
+                strategy_signal=snapshot.strategy_signal,
+                bias=snapshot.bias,
+                generated_at=snapshot.generated_at,
+                signal_price=snapshot.signal_price,
+                vwap=snapshot.vwap,
+                target_qty=snapshot.target_qty,
+                note=snapshot.note,
+                delta_pct=snapshot.delta_pct,
+                batch_label=snapshot.batch_label,
+            )
+            # Store signal_id in snapshot for later reference
+            snapshot.signal_id = signal_id  # type: ignore
+        except Exception as exc:
+            log_line(f"⚠️ Failed to save signal to persistent storage: {exc}")
     
 __all__ = ["TradingEngine", "EngineConfig", "TradeMetrics", "SignalSnapshot"]
 
