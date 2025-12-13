@@ -14,8 +14,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..utils.market_hours import PSXMarketHours
-from ..utils import log_line
+from ...utils.market_hours import PSXMarketHours
+from ...utils.logger import log_line
 
 
 class SignalQueue:
